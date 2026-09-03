@@ -9,11 +9,11 @@ import {
   prisma,
 } from "@eureka-atlas/database";
 import { PackageService } from "../package/package.service";
-import { GovernanceAiService } from "./governance-ai.service";
 import {
   classifySemanticType,
   normalizeSemanticType,
 } from "./semantic-classifier";
+import { MetricFormulaService } from "./metric-formula.service";
 
 type TableDraft = {
   businessName: string;
@@ -28,12 +28,20 @@ type ColumnDraft = {
   aggregation: string;
   unit: string;
 };
+type MetricDraft = {
+  id: string;
+  name: string;
+  formula: string;
+  unit: string;
+};
 export type WorkspaceInput = {
   selectedColumns?: string[];
   table?: Partial<TableDraft>;
   columns?: ColumnDraft[];
+  metrics?: MetricDraft[];
 };
 export type CreateWorkspaceInput = WorkspaceInput & { tableId?: string };
+export type FormulaValidationInput = { tableId?: string; selectedColumns?: string[]; formula?: string };
 const types = new Set(Object.values(ColumnSemanticType));
 const text = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
@@ -41,8 +49,8 @@ const text = (value: unknown) =>
 @Injectable()
 export class GovernanceWorkspaceService {
   constructor(
-    private readonly ai: GovernanceAiService,
     private readonly packages: PackageService,
+    private readonly formulas: MetricFormulaService,
   ) {}
   async create(input: CreateWorkspaceInput) {
     const tableId = text(input.tableId);
@@ -55,7 +63,7 @@ export class GovernanceWorkspaceService {
         selectedColumns: draft.selectedColumns,
         createdBy: "local-user",
         review: {
-          create: { tableDraft: draft.table, columnDrafts: draft.columns },
+          create: { tableDraft: draft.table, columnDrafts: draft.columns, metricDrafts: draft.metrics },
         },
       },
     });
@@ -72,6 +80,7 @@ export class GovernanceWorkspaceService {
       ? this.fromReview(
           task.review.tableDraft,
           task.review.columnDrafts,
+          task.review.metricDrafts,
           allColumns,
           selectedColumns,
           task.metaTable,
@@ -131,6 +140,24 @@ export class GovernanceWorkspaceService {
       },
     };
   }
+  async validateFormula(input: FormulaValidationInput) {
+    const tableId = text(input.tableId);
+    if (!tableId) throw new BadRequestException("tableId is required");
+    await this.table(tableId);
+    const allColumns = await prisma.metaColumn.findMany({
+      where: { metaTableId: tableId, status: AssetStatus.ACTIVE },
+      select: { id: true, name: true },
+    });
+    const selectedIds = this.ids(input.selectedColumns);
+    const selected = allColumns.filter((column) => selectedIds.includes(column.id));
+    if (selected.length !== new Set(selectedIds).size)
+      throw new BadRequestException("Selected columns must belong to this active table");
+    return this.formulas.validateAndResolve(
+      text(input.formula),
+      this.allFormulaFields(selected),
+      this.allFormulaFields(allColumns),
+    );
+  }
   async update(id: string, input: WorkspaceInput) {
     const task = await this.task(id);
     const draft = await this.normalize(input, task.metaTable);
@@ -144,19 +171,19 @@ export class GovernanceWorkspaceService {
       });
       await tx.governanceReview.upsert({
         where: { governanceTaskId: id },
-        create: {
-          governanceTaskId: id,
+          create: {
+            governanceTaskId: id,
+            tableDraft: draft.table,
+            columnDrafts: draft.columns,
+            metricDrafts: draft.metrics,
+          },
+        update: {
           tableDraft: draft.table,
           columnDrafts: draft.columns,
+          metricDrafts: draft.metrics,
         },
-        update: { tableDraft: draft.table, columnDrafts: draft.columns },
       });
     });
-    return this.get(id);
-  }
-  async generate(id: string, input: WorkspaceInput) {
-    await this.update(id, input);
-    await this.ai.execute(id);
     return this.get(id);
   }
   async publish(id: string, input?: WorkspaceInput) {
@@ -171,12 +198,13 @@ export class GovernanceWorkspaceService {
       ? this.fromReview(
           task.review.tableDraft,
           task.review.columnDrafts,
+          task.review.metricDrafts,
           allColumns,
           selectedColumns,
           task.metaTable,
         )
       : this.defaultDraft(task.metaTable, allColumns, selectedColumns);
-    this.validatePublish(draft);
+    const resolvedMetrics = this.validatePublish(draft, allColumns);
     const active = new Set(allColumns.map((column) => column.id));
     if (
       draft.table.permissionColumnId &&
@@ -224,6 +252,22 @@ export class GovernanceWorkspaceService {
             publishedBy: "local-user",
             publishedAt,
           },
+        });
+      await tx.semanticMetric.deleteMany({
+        where: { metaTableId: task.metaTableId },
+      });
+      if (resolvedMetrics.length)
+        await tx.semanticMetric.createMany({
+          data: resolvedMetrics.map(({ draft: metric, resolved }) => ({
+            metaTableId: task.metaTableId,
+            sourceGovernanceTaskId: id,
+            name: metric.name,
+            formula: resolved.formula,
+            unit: metric.unit || null,
+            dependencies: resolved.dependencies,
+            publishedBy: "local-user",
+            publishedAt,
+          })),
         });
       await this.packages.generateForTable(tx, task.metaTableId);
       await tx.governanceTask.update({
@@ -293,11 +337,13 @@ export class GovernanceWorkspaceService {
           unit: "",
         };
       }),
+      metrics: [],
     };
   }
   private fromReview(
     tableValue: unknown,
     columnsValue: unknown,
+    metricsValue: unknown,
     columns: Array<{
       id: string;
       name: string;
@@ -312,6 +358,7 @@ export class GovernanceWorkspaceService {
       {
         table: tableValue as Partial<TableDraft>,
         columns: columnsValue as ColumnDraft[],
+        metrics: metricsValue as MetricDraft[],
         selectedColumns: selected,
       },
       columns,
@@ -375,7 +422,7 @@ export class GovernanceWorkspaceService {
       throw new BadRequestException(
         "Permission column must belong to this active table",
       );
-    return {
+    const normalized = {
       selectedColumns,
       table: {
         businessName: text(rawTable.businessName) || table.name,
@@ -397,12 +444,24 @@ export class GovernanceWorkspaceService {
         aggregation: text(column.aggregation),
         unit: text(column.unit),
       })),
+      metrics: (Array.isArray(input.metrics) ? input.metrics : []).map((metric) => ({
+        id: text(metric.id),
+        name: text(metric.name),
+        formula: text(metric.formula),
+        unit: text(metric.unit),
+      })),
     };
+    const metricIds = normalized.metrics.map((metric) => metric.id);
+    if (metricIds.some((id) => !id) || new Set(metricIds).size !== metricIds.length)
+      throw new BadRequestException("Every metric draft needs a unique id");
+    this.validateMetricReferences(normalized, allColumns);
+    return normalized;
   }
   private validatePublish(draft: {
     table: TableDraft;
     columns: ColumnDraft[];
-  }) {
+    metrics: MetricDraft[];
+  }, allColumns: Array<{ id: string; name: string }>) {
     if (
       !draft.table.businessName ||
       !draft.table.description ||
@@ -427,5 +486,44 @@ export class GovernanceWorkspaceService {
           "Metric columns require an aggregation before publishing",
         );
     }
+    const names = draft.metrics.map((metric) => metric.name);
+    if (names.some((name) => !name) || new Set(names).size !== names.length)
+      throw new BadRequestException("Derived metric names must be present and unique");
+    return draft.metrics.map((metric) => ({
+      draft: metric,
+      resolved: this.formulas.validateAndResolve(
+        metric.formula,
+        this.selectedFormulaFields(draft, allColumns),
+        this.allFormulaFields(allColumns),
+      ),
+    }));
+  }
+  private validateMetricReferences(
+    draft: { columns: ColumnDraft[]; metrics: MetricDraft[] },
+    allColumns: Array<{ id: string; name: string }>,
+  ) {
+    const selected = this.selectedFormulaFields(draft, allColumns);
+    for (const metric of draft.metrics)
+      if (metric.formula)
+        this.formulas.validateAndResolve(
+          metric.formula,
+          selected,
+          this.allFormulaFields(allColumns),
+        );
+  }
+  private selectedFormulaFields(
+    draft: { columns: ColumnDraft[] },
+    allColumns: Array<{ id: string; name: string }>,
+  ) {
+    const names = new Map(allColumns.map((column) => [column.id, column.name]));
+    return draft.columns
+      .filter((column) => Boolean(names.get(column.metaColumnId)))
+      .map((column) => ({
+        id: column.metaColumnId,
+        column: names.get(column.metaColumnId) ?? "",
+      }));
+  }
+  private allFormulaFields(allColumns: Array<{ id: string; name: string }>) {
+    return allColumns.map((column) => ({ id: column.id, column: column.name }));
   }
 }

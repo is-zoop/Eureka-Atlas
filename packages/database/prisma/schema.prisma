@@ -24,6 +24,21 @@ enum GovernanceTaskStatus {
   COMPLETED
 }
 
+enum AiGenerationStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AiGenerationStep {
+  SAVING_DRAFT
+  PREPARING_CONTEXT
+  CALLING_LLM
+  VALIDATING_RESULT
+  SAVING_SUGGESTIONS
+}
+
 enum ColumnSemanticType {
   METRIC
   DIMENSION
@@ -81,6 +96,7 @@ model MetaTable {
   governanceTasks GovernanceTask[]
   semantic        TableSemantic?
   semanticPackage SemanticPackage?
+  semanticMetrics SemanticMetric[]
 
   @@unique([metaProjectId, name])
   @@map("meta_table")
@@ -120,10 +136,29 @@ model GovernanceTask {
   review           GovernanceReview?
   publishedTableSemantics  TableSemantic[]  @relation("PublishedTableSemantics")
   publishedColumnSemantics ColumnSemantic[] @relation("PublishedColumnSemantics")
+  publishedSemanticMetrics SemanticMetric[] @relation("PublishedSemanticMetrics")
+  aiGenerations AiGeneration[]
 
   @@index([metaTableId])
   @@index([createdAt])
   @@map("governance_task")
+}
+
+model AiGeneration {
+  id                 String               @id @default(cuid())
+  governanceTaskId   String
+  status             AiGenerationStatus   @default(RUNNING)
+  step               AiGenerationStep     @default(SAVING_DRAFT)
+  message            String
+  error              String?
+  previousTaskStatus GovernanceTaskStatus
+  startedAt          DateTime             @default(now())
+  completedAt        DateTime?
+  governanceTask     GovernanceTask       @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
+
+  @@index([governanceTaskId, status])
+  @@index([startedAt])
+  @@map("ai_generation")
 }
 
 model AiTableSuggestion {
@@ -162,11 +197,31 @@ model GovernanceReview {
   governanceTaskId String         @unique
   tableDraft       Json
   columnDrafts     Json
+  metricDrafts     Json           @default("[]")
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
   governanceTask   GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
 
   @@map("governance_review")
+}
+
+model SemanticMetric {
+  id                     String         @id @default(cuid())
+  metaTableId            String
+  sourceGovernanceTaskId String
+  name                   String
+  formula                String
+  unit                   String?
+  dependencies           Json
+  publishedBy            String
+  publishedAt            DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+  metaTable              MetaTable      @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+  sourceGovernanceTask   GovernanceTask @relation("PublishedSemanticMetrics", fields: [sourceGovernanceTaskId], references: [id], onDelete: Restrict)
+
+  @@unique([metaTableId, name])
+  @@index([sourceGovernanceTaskId])
+  @@map("semantic_metric")
 }
 
 model TableSemantic {

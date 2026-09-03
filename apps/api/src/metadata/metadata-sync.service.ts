@@ -65,14 +65,14 @@ export class MetadataSyncService {
       prisma.metaTable.findMany({ where: activeWhere, select: { type: true }, distinct: ["type"], orderBy: { type: "asc" } }),
     ]);
     const totalPages = Math.max(1, Math.ceil(total / pageSize)); const page = Math.min(positiveInteger(input.page, 1), totalPages);
-    const tables = await prisma.metaTable.findMany({ where, include: { metaProject: true, _count: { select: { columns: { where: { status: "ACTIVE" } } } } }, orderBy: [{ metaProject: { name: "asc" } }, { name: "asc" }], skip: (page - 1) * pageSize, take: pageSize });
-    return { items: tables.map((table) => ({ id: table.id, name: table.name, type: table.type, comment: table.comment, project: table.metaProject.name, columnCount: table._count.columns, updatedAt: table.sourceUpdatedAt ?? table.updatedAt, governanceStatus: "UNGOVERNED" })), total, page, pageSize, totalPages, filters: { projects: projects.map((item) => item.name), types: types.map((item) => item.type) } };
+    const tables = await prisma.metaTable.findMany({ where, include: { metaProject: true, semantic: { select: { id: true } }, semanticPackage: { select: { id: true } }, _count: { select: { columns: { where: { status: "ACTIVE" } } } } }, orderBy: [{ metaProject: { name: "asc" } }, { name: "asc" }], skip: (page - 1) * pageSize, take: pageSize });
+    return { items: tables.map((table) => ({ id: table.id, name: table.name, type: table.type, comment: table.comment, project: table.metaProject.name, columnCount: table._count.columns, updatedAt: table.sourceUpdatedAt ?? table.updatedAt, governanceStatus: table.semantic ? "COMPLETED" : "UNGOVERNED", hasPackage: Boolean(table.semanticPackage) })), total, page, pageSize, totalPages, filters: { projects: projects.map((item) => item.name), types: types.map((item) => item.type) } };
   }
 
   async getTable(id: string) {
-    const table = await prisma.metaTable.findUnique({ where: { id }, include: { metaProject: true } });
+    const table = await prisma.metaTable.findUnique({ where: { id }, include: { metaProject: true, semantic: { select: { id: true } }, semanticPackage: { select: { id: true } } } });
     if (!table) throw new NotFoundException("Table not found");
-    return { id: table.id, name: table.name, type: table.type, comment: table.comment, project: table.metaProject.name, updatedAt: table.sourceUpdatedAt ?? table.updatedAt, status: table.status };
+    return { id: table.id, name: table.name, type: table.type, comment: table.comment, project: table.metaProject.name, updatedAt: table.sourceUpdatedAt ?? table.updatedAt, status: table.status, governanceStatus: table.semantic ? "COMPLETED" : "UNGOVERNED", hasPackage: Boolean(table.semanticPackage) };
   }
 
   async listColumns(id: string) {

@@ -15,6 +15,15 @@ export type SemanticPackageContent = {
     aggregation: string | null;
     unit: string | null;
   }>;
+  metrics: Array<{
+    name: string;
+    type: "DERIVED";
+    formula: string;
+    unit: string | null;
+    dependencies: Array<{
+      column: string;
+    }>;
+  }>;
 };
 
 type PackageSource = {
@@ -33,6 +42,12 @@ type PackageSource = {
       aggregation: string | null;
       unit: string | null;
     } | null;
+  }>;
+  semanticMetrics: Array<{
+    name: string;
+    formula: string;
+    unit: string | null;
+    dependencies: unknown;
   }>;
 };
 
@@ -53,6 +68,25 @@ export function buildSemanticPackage(
         ]
       : [],
   );
+  const metrics = (source.semanticMetrics ?? []).map((metric) => {
+    const dependencies = Array.isArray(metric.dependencies)
+      ? metric.dependencies.filter(
+          (item): item is {
+            column: string;
+            meta_column_id: string;
+          } => Boolean(item && typeof item === "object"),
+        )
+      : [];
+    return {
+      name: metric.name,
+      type: "DERIVED" as const,
+      formula: metric.formula,
+      unit: metric.unit,
+      dependencies: dependencies.map((dependency) => ({
+        column: dependency.column,
+      })),
+    };
+  });
   return {
     table: {
       name: source.name,
@@ -62,5 +96,6 @@ export function buildSemanticPackage(
       permission_field: source.semantic.permissionColumn?.name ?? null,
     },
     fields,
+    metrics,
   };
 }

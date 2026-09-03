@@ -1,15 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
+  ArrowLeft,
   CheckCircle2,
   Clipboard,
   Download,
   FileJson,
   RefreshCw,
 } from "lucide-react";
-import { PageHeader } from "@/components/common/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { api } from "@/lib/api";
@@ -28,6 +29,13 @@ type SemanticPackage = {
     type: string;
     aggregation: string | null;
     unit: string | null;
+  }>;
+  metrics: Array<{
+    name: string;
+    type: "DERIVED";
+    formula: string;
+    unit: string | null;
+    dependencies: Array<{ column: string }>;
   }>;
   updatedAt: string;
 };
@@ -66,7 +74,11 @@ export default function SemanticPackagePage() {
   const json = useMemo(
     () =>
       data
-        ? JSON.stringify({ table: data.table, fields: data.fields }, null, 2)
+        ? JSON.stringify(
+            { table: data.table, fields: data.fields, metrics: data.metrics ?? [] },
+            null,
+            2,
+          )
         : "",
     [data],
   );
@@ -107,13 +119,9 @@ export default function SemanticPackagePage() {
   };
   return (
     <main>
-      <PageHeader
-        title="Semantic Package"
-        description="面向未来 Agent 消费的已发布数据语义 JSON。"
-        backHref={`/assets/tables/${id}`}
-        actions={
-          data ? (
-            <>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <Button asChild variant="outline"><Link href={`/assets/tables/${id}`}><ArrowLeft className="mr-2 h-4 w-4" />返回</Link></Button>
+        {data && <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => void copy()}>
                 <Clipboard className="mr-2 h-4 w-4" />
                 复制 JSON
@@ -126,10 +134,8 @@ export default function SemanticPackagePage() {
                 <RefreshCw className="mr-2 h-4 w-4" />
                 重新生成
               </Button>
-            </>
-          ) : undefined
-        }
-      />
+        </div>}
+      </div>
       {error && (
         <p className="mb-5 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {error}
@@ -174,6 +180,10 @@ export default function SemanticPackagePage() {
               <div>
                 <p className="text-slate-500">字段数</p>
                 <p className="mt-1 font-medium">{data.fields.length} 个</p>
+              </div>
+              <div>
+                <p className="text-slate-500">派生指标</p>
+                <p className="mt-1 font-medium">{data.metrics?.length ?? 0} 个</p>
               </div>
               <div>
                 <p className="text-slate-500">更新时间</p>

@@ -9,7 +9,7 @@ export class PackageService {
   }
 
   async generateForTable(tx: Prisma.TransactionClient, tableId: string) {
-    const table = await tx.metaTable.findUnique({ where: { id: tableId }, include: { semantic: { include: { permissionColumn: { select: { name: true } } } }, columns: { where: { semantic: { isNot: null } }, include: { semantic: true }, orderBy: { ordinal: "asc" } } } });
+    const table = await tx.metaTable.findUnique({ where: { id: tableId }, include: { semantic: { include: { permissionColumn: { select: { name: true } } } }, columns: { where: { semantic: { isNot: null } }, include: { semantic: true }, orderBy: { ordinal: "asc" } }, semanticMetrics: { orderBy: { name: "asc" } } } });
     if (!table) throw new NotFoundException("Table not found");
     if (!table.semantic) throw new BadRequestException("Publish table semantic before generating a package");
     if (!table.columns.length) throw new BadRequestException("Publish at least one column semantic before generating a package");
@@ -24,6 +24,7 @@ export class PackageService {
     if (!table) throw new NotFoundException("Table not found");
     const semanticPackage = await prisma.semanticPackage.findUnique({ where: { metaTableId: tableId } });
     if (!semanticPackage) throw new NotFoundException("Semantic package not found for this table");
-    return { ...(semanticPackage.content as SemanticPackageContent), updatedAt: semanticPackage.updatedAt };
+    const content = semanticPackage.content as SemanticPackageContent;
+    return { ...content, metrics: Array.isArray(content.metrics) ? content.metrics : [], updatedAt: semanticPackage.updatedAt };
   }
 }

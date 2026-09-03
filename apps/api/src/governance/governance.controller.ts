@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Put } from "@nestjs/common";
 import { GovernanceService } from "./governance.service";
-import { CreateWorkspaceInput, GovernanceWorkspaceService, WorkspaceInput } from "./governance-workspace.service";
+import { CreateWorkspaceInput, FormulaValidationInput, GovernanceWorkspaceService, WorkspaceInput } from "./governance-workspace.service";
+import { GenerationInput, GovernanceGenerationService } from "./governance-generation.service";
 
 @Controller("governance/tasks")
 export class GovernanceController {
@@ -12,10 +13,13 @@ export class GovernanceController {
 
 @Controller("governance/workspaces")
 export class GovernanceWorkspaceController {
-  constructor(private readonly workspaceService: GovernanceWorkspaceService) {}
+  constructor(private readonly workspaceService: GovernanceWorkspaceService, private readonly generations: GovernanceGenerationService) {}
 
   @Post()
   create(@Body() input: CreateWorkspaceInput) { return this.workspaceService.create(input); }
+
+  @Post("formulas/validate")
+  validateFormula(@Body() input: FormulaValidationInput) { return this.workspaceService.validateFormula(input); }
 
   @Get(":id")
   get(@Param("id") id: string) { return this.workspaceService.get(id); }
@@ -23,8 +27,17 @@ export class GovernanceWorkspaceController {
   @Put(":id")
   update(@Param("id") id: string, @Body() input: WorkspaceInput) { return this.workspaceService.update(id, input); }
 
-  @Post(":id/generate")
-  generate(@Param("id") id: string, @Body() input: WorkspaceInput) { return this.workspaceService.generate(id, input); }
+  @Post(":id/generations")
+  startGeneration(@Param("id") id: string, @Body() input: GenerationInput) { return this.generations.start(id, input); }
+
+  @Get(":id/generations/active")
+  activeGeneration(@Param("id") id: string) { return this.generations.active(id); }
+
+  @Get(":id/generations/:generationId")
+  generation(@Param("id") id: string, @Param("generationId") generationId: string) { return this.generations.get(id, generationId); }
+
+  @Post(":id/generations/:generationId/cancel")
+  cancelGeneration(@Param("id") id: string, @Param("generationId") generationId: string) { return this.generations.cancel(id, generationId); }
 
   @Post(":id/publish")
   publish(@Param("id") id: string, @Body() input: WorkspaceInput) { return this.workspaceService.publish(id, input); }

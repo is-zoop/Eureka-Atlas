@@ -1,9 +1,9 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Check, ChevronDown, Save, Sparkles, Upload } from "lucide-react";
-import { PageHeader } from "@/components/common/page-header";
+import { ArrowLeft, Check, ChevronDown, Save, Sparkles, Upload } from "lucide-react";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,6 +31,8 @@ import {
 } from "@/components/ui/field";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { CalculatedMetrics, type MetricDraft } from "@/components/governance/calculated-metrics";
+import { AiGenerationDialog, type AiGeneration } from "@/components/governance/ai-generation-dialog";
 import { api } from "@/lib/api";
 
 type Field = {
@@ -67,7 +69,7 @@ type Workspace = {
   table: TableInfo;
   allColumns: Field[];
   selectedColumns: string[];
-  draft: { table: TableDraft; columns: ColumnDraft[] };
+  draft: { table: TableDraft; columns: ColumnDraft[]; metrics: MetricDraft[] };
   ai: null | {
     table: Omit<TableDraft, "permissionColumnId">;
     columns: Array<
@@ -92,6 +94,9 @@ const labels = {
   LABEL: "标签",
   PARTITION: "分区",
 };
+function AiHint({ value, onAdopt }: { value?: string | null; onAdopt?: () => void }) {
+  return value ? <div className="flex min-w-0 items-center gap-1"><p className="min-w-0 truncate text-xs text-sky-700" title={`AI 建议：${value}`}>AI 建议：{value}</p>{onAdopt && <Button variant="outline" size="sm" className="h-6 shrink-0 px-2 text-[11px]" onClick={onAdopt}>采用</Button>}</div> : null;
+}
 const numericType =
   /^(tinyint|smallint|int|integer|bigint|float|double|real|decimal|numeric)(\b|\()/i;
 const classify = (column: Field): ColumnDraft["semanticType"] =>
@@ -107,7 +112,7 @@ export default function GovernanceWorkspacePage() {
     <Suspense
       fallback={
         <main>
-          <PageHeader title="治理工作台" description="正在加载治理工作台…" />
+          <p className="text-sm text-slate-500">正在加载治理工作台…</p>
         </main>
       }
     >
@@ -123,25 +128,32 @@ function WorkspaceContent() {
   const initialTask = search.get("task") ?? "";
   const [taskId, setTaskId] = useState(initialTask);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [table, setTable] = useState<TableInfo | null>(null);
   const [allColumns, setAllColumns] = useState<Field[]>([]);
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [draft, setDraft] = useState<{
     table: TableDraft;
     columns: ColumnDraft[];
+    metrics: MetricDraft[];
   } | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<
     Set<ColumnDraft["semanticType"]>
   >(new Set());
-  const [working, setWorking] = useState<"save" | "generate" | "publish" | "">(
+  const [working, setWorking] = useState<"save" | "publish" | "">(
     "",
   );
+  const [generationOpen, setGenerationOpen] = useState(false);
+  const [activeGeneration, setActiveGeneration] = useState<AiGeneration | null>(null);
+  const [showAiSuggestions, setShowAiSuggestions] = useState(true);
+  const [editingMetricId, setEditingMetricId] = useState<string | null>(null);
+  const [formulaInsertion, setFormulaInsertion] = useState<{
+    revision: number;
+    field: string;
+  } | null>(null);
   const apply = (result: Workspace) => {
     setWorkspace(result);
     setTaskId(result.id);
-    setTable(result.table);
     setAllColumns(result.allColumns);
     setSelectedColumns(result.selectedColumns);
     setDraft(result.draft);
@@ -164,7 +176,6 @@ function WorkspaceContent() {
     ])
       .then(([detail, columns]) => {
         if (cancelled) return;
-        setTable(detail);
         setAllColumns(columns);
         setDraft({
           table: {
@@ -174,6 +185,7 @@ function WorkspaceContent() {
             permissionColumnId: null,
           },
           columns: [],
+          metrics: [],
         });
       })
       .catch((cause: Error) => !cancelled && setError(cause.message));
@@ -181,6 +193,16 @@ function WorkspaceContent() {
       cancelled = true;
     };
   }, [initialTask, tableId]);
+  useEffect(() => {
+    if (!taskId) return;
+    void api<AiGeneration | null>(`/governance/workspaces/${taskId}/generations/active`)
+      .then((generation) => {
+        if (!generation) return;
+        setActiveGeneration(generation);
+        setGenerationOpen(true);
+      })
+      .catch(() => undefined);
+  }, [taskId]);
   const columnById = useMemo(
     () =>
       new Map(
@@ -218,7 +240,7 @@ function WorkspaceContent() {
         ? { ...current, table: { ...current.table, [key]: next } }
         : current,
     );
-  const updateColumn = (id: string, key: keyof ColumnDraft, next: string) =>
+  const updateColumn = (id: string, key: keyof ColumnDraft, next: string) => {
     setDraft((current) =>
       current
         ? {
@@ -229,6 +251,7 @@ function WorkspaceContent() {
           }
         : current,
     );
+  };
   const toggle = (column: Field) => {
     setSelectedColumns((current) => {
       const selected = current.includes(column.id);
@@ -288,7 +311,25 @@ function WorkspaceContent() {
     selectedColumns,
     table: draft?.table,
     columns: draft?.columns,
+    metrics: draft?.metrics,
   });
+  const formulaFields = useMemo(
+    () =>
+      selectedColumns.flatMap((id) => {
+        const field = allColumns.find((column) => column.id === id);
+        return field
+          ? [{ id: field.id, name: field.name, dataType: field.dataType, comment: field.comment }]
+          : [];
+      }),
+    [allColumns, selectedColumns],
+  );
+  const insertFormulaField = (field: Field) => {
+    if (!editingMetricId) return;
+    setFormulaInsertion((current) => ({
+      revision: (current?.revision ?? 0) + 1,
+      field: field.name,
+    }));
+  };
   const saveWorkspace = async () => {
     if (!draft) return null;
     if (!selectedColumns.length) throw new Error("请先从左侧选择至少一个字段");
@@ -310,7 +351,7 @@ function WorkspaceContent() {
     apply(result);
     return result;
   };
-  const perform = async (action: "save" | "generate" | "publish") => {
+  const perform = async (action: "save" | "publish") => {
     setError("");
     setNotice("");
     setWorking(action);
@@ -321,15 +362,11 @@ function WorkspaceContent() {
       if (action === "save") setNotice("草稿已保存");
       else {
         const result = await api<Workspace>(
-          `/governance/workspaces/${id}/${action === "generate" ? "generate" : "publish"}`,
+          `/governance/workspaces/${id}/publish`,
           { method: "POST", body: JSON.stringify(payload()) },
         );
         apply(result);
-        setNotice(
-          action === "generate"
-            ? "AI 建议已生成，可逐项采用"
-            : "正式语义和 Semantic Package 已发布",
-        );
+        setNotice("正式语义和 Semantic Package 已发布");
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败");
@@ -348,6 +385,19 @@ function WorkspaceContent() {
     const ai = aiById.get(id);
     if (ai) updateColumn(id, key, ai[key]);
   };
+  const adoptAllAi = () => {
+    const ai = workspace?.ai;
+    if (!ai) return;
+    const aiColumns = new Map(ai.columns.map((column) => [column.metaColumnId, column]));
+    setDraft((current) => current ? {
+      ...current,
+      table: { ...current.table, businessName: ai.table.businessName, description: ai.table.description, grain: ai.table.grain },
+      columns: current.columns.map((column) => {
+        const suggestion = aiColumns.get(column.metaColumnId);
+        return suggestion ? { ...column, metricName: suggestion.metricName, semanticType: suggestion.semanticType, aggregation: suggestion.aggregation, unit: suggestion.unit } : column;
+      }),
+    } : current);
+  };
   if (error && !draft)
     return (
       <main>
@@ -358,13 +408,9 @@ function WorkspaceContent() {
     );
   return (
     <main className="flex h-[calc(100vh-104px)] min-h-0 flex-col overflow-hidden">
-      <PageHeader
-        title={table ? `${table.name} · 治理工作台` : "治理工作台"}
-        backHref="/assets/tables"
-        showEyebrow={false}
-        compact
-        actions={
-          <div className="flex flex-wrap gap-2">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Button asChild size="sm" variant="outline"><Link href="/assets/tables"><ArrowLeft className="mr-1.5 h-4 w-4" />返回</Link></Button>
+        <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -377,11 +423,11 @@ function WorkspaceContent() {
             <Button
               size="sm"
               variant="outline"
-              disabled={Boolean(working)}
-              onClick={() => void perform("generate")}
+              disabled={Boolean(working) || !draft}
+              onClick={() => setGenerationOpen(true)}
             >
               <Sparkles className="mr-1.5 h-4 w-4" />
-              {working === "generate" ? "生成中…" : "生成 AI 建议"}
+              生成 AI 建议
             </Button>
             <Button
               size="sm"
@@ -391,9 +437,8 @@ function WorkspaceContent() {
               <Upload className="mr-1.5 h-4 w-4" />
               {working === "publish" ? "发布中…" : "发布正式语义"}
             </Button>
-          </div>
-        }
-      />
+        </div>
+      </div>
       {error && (
         <p className="mb-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {error}
@@ -404,6 +449,35 @@ function WorkspaceContent() {
           {notice}
         </p>
       )}
+      <AiGenerationDialog
+        key={activeGeneration?.id ?? "new"}
+        open={generationOpen}
+        taskId={taskId}
+        generation={activeGeneration}
+        selectedCount={selectedColumns.length}
+        onOpenChange={(open) => {
+          setGenerationOpen(open);
+          if (!open) setActiveGeneration(null);
+        }}
+        onStart={async (reference) => {
+          const saved = await saveWorkspace();
+          const id = saved?.id ?? taskId;
+          if (!id) throw new Error("无法创建治理任务");
+          const generation = await api<AiGeneration>(`/governance/workspaces/${id}/generations`, {
+            method: "POST",
+            body: JSON.stringify({ ...payload(), reference }),
+          });
+          setActiveGeneration(generation);
+          return { taskId: id, generation };
+        }}
+        onCompleted={async () => {
+          const id = taskId;
+          if (!id) return;
+          const result = await api<Workspace>(`/governance/workspaces/${id}`);
+          apply(result);
+          setNotice("AI 建议已生成，可逐项采用");
+        }}
+      />
       {workspace && (
         <Card className="mb-5">
           <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
@@ -474,6 +548,18 @@ function WorkspaceContent() {
                             分区
                           </span>
                         )}
+                        {editingMetricId && selectedColumns.includes(column.id) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              insertFormulaField(column);
+                            }}
+                          >
+                            引用
+                          </Button>
+                        )}
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -485,12 +571,14 @@ function WorkspaceContent() {
         <section className="min-h-0 overflow-hidden">
           {draft && (
             <Tabs defaultValue="table" className="flex h-full min-h-0 flex-col">
-              <TabsList>
-                <TabsTrigger value="table">表语义</TabsTrigger>
-                <TabsTrigger value="columns">
-                  字段语义（{selectedColumns.length}）
-                </TabsTrigger>
-              </TabsList>
+              <div className="flex items-center justify-between gap-3">
+                <TabsList>
+                  <TabsTrigger value="table">表语义</TabsTrigger>
+                  <TabsTrigger value="columns">字段语义（{selectedColumns.length}）</TabsTrigger>
+                  <TabsTrigger value="metrics">计算指标（{draft.metrics.length}）</TabsTrigger>
+                </TabsList>
+                {workspace?.ai && <div className="flex shrink-0 gap-2"><Button size="sm" variant="outline" onClick={() => setShowAiSuggestions((current) => !current)}>{showAiSuggestions ? "隐藏 AI 建议" : "显示 AI 建议"}</Button><Button size="sm" onClick={adoptAllAi}>全部采用</Button></div>}
+              </div>
               <TabsContent
                 value="table"
                 className="min-h-0 flex-1 overflow-hidden"
@@ -500,62 +588,29 @@ function WorkspaceContent() {
                     <FieldGroup className="grid-cols-1 md:grid-cols-2">
                       <Field>
                         <FieldLabel>业务名称</FieldLabel>
-                        <div className="flex gap-2">
-                          <Input
-                            value={draft.table.businessName}
-                            onChange={(event) =>
-                              updateTable("businessName", event.target.value)
-                            }
-                          />
-                          {workspace?.ai && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => adoptTable("businessName")}
-                            >
-                              采用 AI
-                            </Button>
-                          )}
+                        <div className="space-y-1">
+                          <div className="flex gap-2">
+                            <Input value={draft.table.businessName} onChange={(event) => updateTable("businessName", event.target.value)} />
+                          </div>
+                          {showAiSuggestions && <AiHint value={workspace?.ai?.table.businessName} onAdopt={() => adoptTable("businessName")} />}
                         </div>
                       </Field>
                       <Field>
                         <FieldLabel>粒度</FieldLabel>
-                        <div className="flex gap-2">
-                          <Input
-                            value={draft.table.grain}
-                            onChange={(event) =>
-                              updateTable("grain", event.target.value)
-                            }
-                          />
-                          {workspace?.ai && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => adoptTable("grain")}
-                            >
-                              采用 AI
-                            </Button>
-                          )}
+                        <div className="space-y-1">
+                          <div className="flex gap-2">
+                            <Input value={draft.table.grain} onChange={(event) => updateTable("grain", event.target.value)} />
+                          </div>
+                          {showAiSuggestions && <AiHint value={workspace?.ai?.table.grain} onAdopt={() => adoptTable("grain")} />}
                         </div>
                       </Field>
                       <Field className="md:col-span-2">
                         <FieldLabel>业务描述</FieldLabel>
-                        <div className="flex gap-2">
-                          <Textarea
-                            value={draft.table.description}
-                            onChange={(event) =>
-                              updateTable("description", event.target.value)
-                            }
-                          />
-                          {workspace?.ai && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => adoptTable("description")}
-                            >
-                              采用 AI
-                            </Button>
-                          )}
+                        <div className="space-y-1">
+                          <div className="flex gap-2">
+                            <Textarea value={draft.table.description} onChange={(event) => updateTable("description", event.target.value)} />
+                          </div>
+                          {showAiSuggestions && <AiHint value={workspace?.ai?.table.description} onAdopt={() => adoptTable("description")} />}
                         </div>
                       </Field>
                       <Field>
@@ -657,82 +712,33 @@ function WorkspaceContent() {
                                             {column.comment || "-"}
                                           </DataTableCell>
                                           <DataTableCell>
-                                            <div className="flex gap-1">
-                                              <Input
-                                                className="h-8 min-w-36"
-                                                value={item.metricName}
-                                                onChange={(event) =>
-                                                  updateColumn(
-                                                    column.id,
-                                                    "metricName",
-                                                    event.target.value,
-                                                  )
-                                                }
-                                              />
-                                              {ai && (
-                                                <Button
-                                                  variant="outline"
-                                                  size="sm"
-                                                  onClick={() =>
-                                                    adoptColumn(
-                                                      column.id,
-                                                      "metricName",
-                                                    )
-                                                  }
-                                                >
-                                                  AI
-                                                </Button>
-                                              )}
+                                            <div className="space-y-1">
+                                              <div className="flex gap-1">
+                                                <Input className="h-8 min-w-36" value={item.metricName} onChange={(event) => updateColumn(column.id, "metricName", event.target.value)} />
+                                              </div>
+                                              {showAiSuggestions && <AiHint value={ai?.metricName} onAdopt={() => adoptColumn(column.id, "metricName")} />}
                                             </div>
                                           </DataTableCell>
                                           <DataTableCell>
-                                            <select
-                                              value={item.semanticType}
-                                              onChange={(event) =>
-                                                updateColumn(
-                                                  column.id,
-                                                  "semanticType",
-                                                  event.target.value,
-                                                )
-                                              }
-                                              className="h-8 min-w-24 rounded border border-slate-200 bg-white px-2"
-                                            >
-                                              {types.map((type) => (
-                                                <option key={type} value={type}>
-                                                  {labels[type]}
-                                                </option>
-                                              ))}
-                                            </select>
+                                            <div className="space-y-1">
+                                              <div className="flex gap-1">
+                                                <select value={item.semanticType} onChange={(event) => updateColumn(column.id, "semanticType", event.target.value)} className="h-8 min-w-24 rounded border border-slate-200 bg-white px-2">
+                                                  {types.map((type) => <option key={type} value={type}>{labels[type]}</option>)}
+                                                </select>
+                                              </div>
+                                              {showAiSuggestions && <AiHint value={ai ? labels[ai.semanticType] : undefined} onAdopt={() => adoptColumn(column.id, "semanticType")} />}
+                                            </div>
                                           </DataTableCell>
                                           <DataTableCell>
                                             {item.semanticType === "METRIC" ? (
-                                              <div className="flex gap-1">
-                                                <Input
-                                                  className="h-8 min-w-24"
-                                                  value={item.aggregation}
-                                                  onChange={(event) =>
-                                                    updateColumn(
-                                                      column.id,
-                                                      "aggregation",
-                                                      event.target.value,
-                                                    )
-                                                  }
-                                                  placeholder="必填"
-                                                />
-                                                {ai && (
-                                                  <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    onClick={() =>
-                                                      adoptColumn(
-                                                        column.id,
-                                                        "aggregation",
-                                                      )
-                                                    }
-                                                  >
-                                                    AI
-                                                  </Button>
-                                                )}
+                                              <div className="space-y-1">
+                                                <div className="flex gap-1">
+                                                  <select className="h-8 min-w-28 rounded border border-slate-200 bg-white px-2" value={item.aggregation} onChange={(event) => updateColumn(column.id, "aggregation", event.target.value)}>
+                                                    <option value="">必填</option>
+                                                    {["SUM", "COUNT", "COUNT_DISTINCT", "AVG", "MIN", "MAX"].map((aggregation) => <option key={aggregation} value={aggregation}>{aggregation}</option>)}
+                                                  </select>
+                                                </div>
+                                                {showAiSuggestions && <AiHint value={ai?.aggregation} onAdopt={() => adoptColumn(column.id, "aggregation")} />}
                                               </div>
                                             ) : (
                                               <span className="text-slate-400">
@@ -741,32 +747,11 @@ function WorkspaceContent() {
                                             )}
                                           </DataTableCell>
                                           <DataTableCell>
-                                            <div className="flex gap-1">
-                                              <Input
-                                                className="h-8 min-w-24"
-                                                value={item.unit}
-                                                onChange={(event) =>
-                                                  updateColumn(
-                                                    column.id,
-                                                    "unit",
-                                                    event.target.value,
-                                                  )
-                                                }
-                                              />
-                                              {ai && (
-                                                <Button
-                                                  variant="outline"
-                                                  size="sm"
-                                                  onClick={() =>
-                                                    adoptColumn(
-                                                      column.id,
-                                                      "unit",
-                                                    )
-                                                  }
-                                                >
-                                                  AI
-                                                </Button>
-                                              )}
+                                            <div className="space-y-1">
+                                              <div className="flex gap-1">
+                                                <Input className="h-8 min-w-24" value={item.unit} onChange={(event) => updateColumn(column.id, "unit", event.target.value)} />
+                                              </div>
+                                              {showAiSuggestions && <AiHint value={ai?.unit} onAdopt={() => adoptColumn(column.id, "unit")} />}
                                             </div>
                                           </DataTableCell>
                                         </tr>
@@ -781,6 +766,27 @@ function WorkspaceContent() {
                     </div>
                   </ScrollArea>
                 )}
+              </TabsContent>
+              <TabsContent
+                value="metrics"
+                className="min-h-0 flex-1 overflow-hidden"
+              >
+                <CalculatedMetrics
+                  tableId={tableId}
+                  selectedColumns={selectedColumns}
+                  metrics={draft.metrics}
+                  fields={formulaFields}
+                  insertion={formulaInsertion}
+                  onChange={(metrics) =>
+                    setDraft((current) =>
+                      current ? { ...current, metrics } : current,
+                    )
+                  }
+                  onEditingChange={(id) => {
+                    setEditingMetricId(id);
+                    if (!id) setFormulaInsertion(null);
+                  }}
+                />
               </TabsContent>
             </Tabs>
           )}

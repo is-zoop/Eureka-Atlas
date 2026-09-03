@@ -33,6 +33,23 @@ test("builds the compact semantic package", () => {
         },
       },
     ],
+    semanticMetrics: [
+      {
+        name: "客单价",
+        formula: "SUM(gmv) / NULLIF(SUM(buyer_cnt), 0)",
+        unit: "元",
+        dependencies: [
+          {
+            meta_column_id: "gmv",
+            column: "gmv",
+          },
+          {
+            meta_column_id: "buyer",
+            column: "buyer_cnt",
+          },
+        ],
+      },
+    ],
   });
   assert.deepEqual(result, {
     table: {
@@ -56,6 +73,18 @@ test("builds the compact semantic package", () => {
         type: "METRIC",
         aggregation: "SUM",
         unit: "元",
+      },
+    ],
+    metrics: [
+      {
+        name: "客单价",
+        type: "DERIVED",
+        formula: "SUM(gmv) / NULLIF(SUM(buyer_cnt), 0)",
+        unit: "元",
+        dependencies: [
+          { column: "gmv" },
+          { column: "buyer_cnt" },
+        ],
       },
     ],
   });

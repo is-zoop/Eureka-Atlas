@@ -2,11 +2,13 @@ import { BadGatewayException, Injectable, ServiceUnavailableException } from "@n
 
 @Injectable()
 export class LlmService {
-  async complete(prompt: string): Promise<string> {
+  async complete(prompt: string, signal?: AbortSignal): Promise<string> {
     const baseUrl = process.env.LLM_BASE_URL?.replace(/\/$/, ""); const apiKey = process.env.LLM_API_KEY; const model = process.env.LLM_MODEL;
     if (!baseUrl || !apiKey || !model) throw new ServiceUnavailableException("LLM_BASE_URL, LLM_API_KEY and LLM_MODEL must be configured");
     let response: Response;
-    try { response = await fetch(`${baseUrl}/chat/completions`, { method: "POST", signal: AbortSignal.timeout(60_000), headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, temperature: 0.2, messages: [{ role: "user", content: prompt }] }) }); } catch { throw new BadGatewayException("LLM request failed or timed out after 60 seconds"); }
+    const timeout = AbortSignal.timeout(60_000);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    try { response = await fetch(`${baseUrl}/chat/completions`, { method: "POST", signal: requestSignal, headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, temperature: 0.2, thinking: { type: "disabled" }, response_format: { type: "json_object" }, messages: [{ role: "user", content: prompt }] }) }); } catch { if (signal?.aborted) throw new Error("AI generation cancelled"); throw new BadGatewayException("LLM request failed or timed out after 60 seconds"); }
     const rawBody = await response.text();
     if (!rawBody.trim()) throw new BadGatewayException(`LLM returned an empty response body (HTTP ${response.status})`);
     let body: Record<string, unknown>;
