@@ -1,0 +1,3 @@
+import { Badge } from "@/components/ui/badge";
+type Status = "ACTIVE" | "FAILED" | "UNGOVERNED" | "PENDING" | "PROCESSING" | "REVIEWING" | "COMPLETED";
+export function StatusBadge({ status }: { status: Status }) { const styles: Record<Status, string> = { ACTIVE: "bg-emerald-50 text-emerald-700", FAILED: "bg-rose-50 text-rose-700", UNGOVERNED: "bg-slate-100 text-slate-600", PENDING: "bg-amber-50 text-amber-700", PROCESSING: "bg-sky-50 text-sky-700", REVIEWING: "bg-violet-50 text-violet-700", COMPLETED: "bg-emerald-50 text-emerald-700" }; const labels: Record<Status, string> = { ACTIVE: "可用", FAILED: "连接失败", UNGOVERNED: "未治理", PENDING: "待处理", PROCESSING: "处理中", REVIEWING: "待审核", COMPLETED: "已完成" }; return <Badge className={styles[status]}>{labels[status]}</Badge>; }

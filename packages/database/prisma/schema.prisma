@@ -1,0 +1,219 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DataSourceStatus {
+  ACTIVE
+  FAILED
+}
+
+enum AssetStatus {
+  ACTIVE
+  DEPRECATED
+}
+
+enum GovernanceTaskStatus {
+  PENDING
+  PROCESSING
+  REVIEWING
+  COMPLETED
+}
+
+enum ColumnSemanticType {
+  METRIC
+  DIMENSION
+  LABEL
+  PARTITION
+}
+
+model DataSource {
+  id                 String           @id @default(cuid())
+  name               String           @unique
+  region             String
+  endpoint           String
+  defaultProject     String
+  accessKeyEncrypted String
+  secretKeyEncrypted String
+  status             DataSourceStatus @default(ACTIVE)
+  lastTestedAt       DateTime?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  projects           MetaProject[]
+
+  @@map("data_source")
+}
+
+model MetaProject {
+  id           String      @id @default(cuid())
+  dataSourceId String
+  name         String
+  description  String?
+  region       String
+  status       AssetStatus @default(ACTIVE)
+  lastSyncedAt DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  dataSource   DataSource  @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  tables       MetaTable[]
+
+  @@unique([dataSourceId, name])
+  @@map("meta_project")
+}
+
+model MetaTable {
+  id              String      @id @default(cuid())
+  metaProjectId   String
+  name            String
+  type            String
+  comment         String?
+  sourceUpdatedAt DateTime?
+  status          AssetStatus @default(ACTIVE)
+  lastSyncedAt    DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  metaProject     MetaProject @relation(fields: [metaProjectId], references: [id], onDelete: Cascade)
+  columns         MetaColumn[]
+  governanceTasks GovernanceTask[]
+  semantic        TableSemantic?
+  semanticPackage SemanticPackage?
+
+  @@unique([metaProjectId, name])
+  @@map("meta_table")
+}
+
+model MetaColumn {
+  id          String      @id @default(cuid())
+  metaTableId String
+  name        String
+  dataType    String
+  comment     String?
+  ordinal     Int
+  isPartition Boolean     @default(false)
+  status      AssetStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  metaTable   MetaTable   @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+  aiSuggestions AiColumnSuggestion[]
+  semantic      ColumnSemantic?
+  permissionForTables TableSemantic[] @relation("TableSemanticPermissionColumn")
+
+  @@unique([metaTableId, name])
+  @@map("meta_column")
+}
+
+model GovernanceTask {
+  id              String               @id @default(cuid())
+  metaTableId     String
+  selectedColumns Json
+  status          GovernanceTaskStatus @default(PENDING)
+  createdBy       String
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  metaTable       MetaTable            @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+  tableSuggestion AiTableSuggestion?
+  columnSuggestions AiColumnSuggestion[]
+  review           GovernanceReview?
+  publishedTableSemantics  TableSemantic[]  @relation("PublishedTableSemantics")
+  publishedColumnSemantics ColumnSemantic[] @relation("PublishedColumnSemantics")
+
+  @@index([metaTableId])
+  @@index([createdAt])
+  @@map("governance_task")
+}
+
+model AiTableSuggestion {
+  id           String @id @default(cuid())
+  governanceTaskId String @unique
+  businessName String
+  description  String
+  grain        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  governanceTask GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
+  @@map("ai_table_suggestion")
+}
+
+model AiColumnSuggestion {
+  id           String @id @default(cuid())
+  governanceTaskId String
+  metaColumnId String
+  metricName   String
+  semanticType String
+  aggregation  String?
+  unit         String?
+  confidence   Float
+  reason       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  governanceTask GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
+  metaColumn MetaColumn @relation(fields: [metaColumnId], references: [id], onDelete: Cascade)
+  @@unique([governanceTaskId, metaColumnId])
+  @@index([metaColumnId])
+  @@map("ai_column_suggestion")
+}
+
+model GovernanceReview {
+  id               String         @id @default(cuid())
+  governanceTaskId String         @unique
+  tableDraft       Json
+  columnDrafts     Json
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  governanceTask   GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
+
+  @@map("governance_review")
+}
+
+model TableSemantic {
+  id                     String         @id @default(cuid())
+  metaTableId            String         @unique
+  sourceGovernanceTaskId String
+  businessName           String
+  description            String
+  grain                  String
+  permissionColumnId     String?
+  publishedBy            String
+  publishedAt            DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+  metaTable              MetaTable      @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+  permissionColumn       MetaColumn?    @relation("TableSemanticPermissionColumn", fields: [permissionColumnId], references: [id], onDelete: SetNull)
+  sourceGovernanceTask   GovernanceTask @relation("PublishedTableSemantics", fields: [sourceGovernanceTaskId], references: [id], onDelete: Restrict)
+
+  @@index([sourceGovernanceTaskId])
+  @@index([permissionColumnId])
+  @@map("table_semantic")
+}
+
+model ColumnSemantic {
+  id                     String             @id @default(cuid())
+  metaColumnId           String             @unique
+  sourceGovernanceTaskId String
+  metricName             String
+  semanticType           ColumnSemanticType
+  aggregation            String?
+  unit                   String?
+  publishedBy            String
+  publishedAt            DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  metaColumn             MetaColumn         @relation(fields: [metaColumnId], references: [id], onDelete: Cascade)
+  sourceGovernanceTask   GovernanceTask     @relation("PublishedColumnSemantics", fields: [sourceGovernanceTaskId], references: [id], onDelete: Restrict)
+
+  @@index([sourceGovernanceTaskId])
+  @@map("column_semantic")
+}
+
+model SemanticPackage {
+  id          String    @id @default(cuid())
+  metaTableId String    @unique
+  content     Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  metaTable   MetaTable @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+
+  @@map("semantic_package")
+}

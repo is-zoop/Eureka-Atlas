@@ -1,0 +1,28 @@
+{
+  "name": "@eureka-atlas/database",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "generate": "dotenv -e ../../.env -- prisma generate",
+    "migrate": "dotenv -e ../../.env -- prisma migrate dev --name metadata_assets",
+    "deploy": "dotenv -e ../../.env -- prisma migrate deploy --schema prisma/schema.prisma",
+    "validate": "dotenv -e ../../.env -- prisma validate",
+    "push": "dotenv -e ../../.env -- prisma db push",
+    "studio": "dotenv -e ../../.env -- prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^8.0.0",
+    "prisma": "^6.19.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

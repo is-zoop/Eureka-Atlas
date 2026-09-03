@@ -1,0 +1,19 @@
+{
+  "name": "eureka-atlas",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @eureka-atlas/web --filter @eureka-atlas/api dev",
+    "build": "pnpm db:generate && pnpm -r --if-present build",
+    "lint": "pnpm -r --if-present lint",
+    "db:generate": "pnpm --filter @eureka-atlas/database generate",
+    "db:migrate": "pnpm --filter @eureka-atlas/database migrate",
+    "db:validate": "pnpm --filter @eureka-atlas/database validate",
+    "db:push": "pnpm --filter @eureka-atlas/database push",
+    "db:studio": "pnpm --filter @eureka-atlas/database studio"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}
