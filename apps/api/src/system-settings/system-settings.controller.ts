@@ -10,4 +10,6 @@ export class SystemSettingsController {
   @Delete("ai-prompt") resetAiPrompt() { return this.settings.resetAiPrompt(); }
   @Get("active-ai-model") activeAiModel() { return this.models.current(); }
   @Put("active-ai-model") setActiveAiModel(@Body() body: { modelId?: unknown }) { return this.models.setActive(body?.modelId); }
+  @Get("governance-options") governanceOptions() { return this.settings.governanceOptions(); }
+  @Put("governance-options") saveGovernanceOptions(@Body() body: unknown) { return this.settings.saveGovernanceOptions(body); }
 }

@@ -15,6 +15,7 @@ import {
 } from "./semantic-classifier";
 import { MetricFormulaService } from "./metric-formula.service";
 import { SemanticCatalogService } from "../semantic/semantic-catalog.service";
+import { SystemSettingsService } from "../system-settings/system-settings.service";
 
 type TableDraft = {
   dataDomain: string | null;
@@ -49,24 +50,6 @@ export type WorkspaceInput = {
 export type CreateWorkspaceInput = WorkspaceInput & { tableId?: string };
 export type FormulaValidationInput = { tableId?: string; selectedColumns?: string[]; formula?: string };
 const types = new Set(Object.values(ColumnSemanticType));
-const permissionRelations = new Set([
-  "品牌项目名",
-  "财务店铺名称",
-  "ERP店铺名称",
-  "平台店铺名称",
-]);
-const dataDomains = new Set([
-  "商品企划",
-  "设计研发",
-  "采购管理",
-  "销售管理",
-  "商品运营",
-  "仓库管理",
-  "客服管理",
-  "财务管理",
-  "人资管理",
-  "运维管理",
-]);
 const text = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
 
@@ -76,6 +59,7 @@ export class GovernanceWorkspaceService {
     private readonly packages: PackageService,
     private readonly formulas: MetricFormulaService,
     private readonly catalogs: SemanticCatalogService,
+    private readonly settings: SystemSettingsService,
   ) {}
   async create(input: CreateWorkspaceInput) {
     const tableId = text(input.tableId);
@@ -228,7 +212,8 @@ export class GovernanceWorkspaceService {
   }
   async update(id: string, input: WorkspaceInput) {
     const task = await this.task(id);
-    const draft = await this.normalize(input, task.metaTable);
+    const legacyTable = task.review?.tableDraft as Partial<TableDraft> | undefined;
+    const draft = await this.normalize(input, task.metaTable, legacyTable);
     await prisma.$transaction(async (tx) => {
       await tx.governanceTask.update({
         where: { id },
@@ -451,6 +436,7 @@ export class GovernanceWorkspaceService {
   private async normalize(
     input: WorkspaceInput,
     table: { id: string; name: string; comment: string | null },
+    legacyTable?: Partial<TableDraft>,
   ) {
     const columns = await prisma.metaColumn.findMany({
       where: { metaTableId: table.id, status: AssetStatus.ACTIVE },
@@ -463,7 +449,13 @@ export class GovernanceWorkspaceService {
       },
       orderBy: { ordinal: "asc" },
     });
-    return this.normalizeDraft(input, columns, table);
+    const draft = this.normalizeDraft(input, columns, table);
+    const options = await this.settings.governanceOptions();
+    if (draft.table.dataDomain && !options.dataDomains.includes(draft.table.dataDomain) && draft.table.dataDomain !== text(legacyTable?.dataDomain))
+      throw new BadRequestException("Invalid data domain");
+    if (draft.table.permissionRelation && !options.permissionRelations.includes(draft.table.permissionRelation) && draft.table.permissionRelation !== text(legacyTable?.permissionRelation))
+      throw new BadRequestException("Invalid permission relation");
+    return draft;
   }
   private normalizeDraft(
     input: WorkspaceInput,
@@ -519,10 +511,6 @@ export class GovernanceWorkspaceService {
       throw new BadRequestException(
         "Permission column must belong to this active table",
       );
-    if (permissionRelation && !permissionRelations.has(permissionRelation))
-      throw new BadRequestException("Invalid permission relation");
-    if (dataDomain && !dataDomains.has(dataDomain))
-      throw new BadRequestException("Invalid data domain");
     const normalized = {
       selectedColumns,
       table: {

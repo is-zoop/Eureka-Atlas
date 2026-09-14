@@ -3,7 +3,7 @@ import { ColumnSemanticType, prisma } from "@eureka-atlas/database";
 import { LlmService } from "../llm/llm.service";
 import { MetricFormulaService } from "./metric-formula.service";
 import { SemanticReferenceService } from "./semantic-reference.service";
-import { SystemSettingsService } from "../system-settings/system-settings.service";
+import { DEFAULT_GOVERNANCE_OPTIONS, SystemSettingsService } from "../system-settings/system-settings.service";
 
 type ParsedMetric = { name: string; formula: string; unit?: string; confidence?: number; reason?: string };
 type Parsed = {
@@ -13,8 +13,6 @@ type Parsed = {
 };
 export type AiGenerationHooks = { referenceMarkdown?: string; signal?: AbortSignal; onStep?: (step: "PREPARING_CONTEXT" | "CALLING_LLM" | "VALIDATING_RESULT" | "SAVING_SUGGESTIONS", message: string) => Promise<void>; ensureActive?: () => Promise<void> };
 const normalizedConfidence = (value: unknown) => { const number = typeof value === "number" ? value : Number.parseFloat(String(value ?? "")); return Number.isFinite(number) ? Math.min(1, Math.max(0, number)) : 0.7; };
-const dataDomains = new Set(["商品企划", "设计研发", "采购管理", "销售管理", "商品运营", "仓库管理", "客服管理", "财务管理", "人资管理", "运维管理"]);
-const permissionRelations = new Set(["品牌项目名", "财务店铺名称", "ERP店铺名称", "平台店铺名称"]);
 const nullableText = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : null;
 const booleanValue = (value: unknown, fallback: boolean) => {
   if (typeof value === "boolean") return value;
@@ -52,11 +50,12 @@ export class GovernanceAiService {
     const context = await this.context(task);
     await hooks.ensureActive?.();
     await hooks.onStep?.("CALLING_LLM", "正在调用 AI 模型生成建议");
-    const prompt = await this.prompt(context, hooks.referenceMarkdown);
+    const options = await this.settings.governanceOptions();
+    const prompt = await this.prompt(context, hooks.referenceMarkdown, options);
     const raw = await this.llm.complete(prompt.system, prompt.user, hooks.signal);
     await hooks.ensureActive?.();
     await hooks.onStep?.("VALIDATING_RESULT", "正在校验 AI 返回的建议");
-    const parsed = this.parse(raw, task.columns.map((column) => column.name), new Map(context.fieldReferences.map((item) => [item.current_column, item.preferred_name])), Boolean(hooks.referenceMarkdown?.trim()));
+    const parsed = this.parse(raw, task.columns.map((column) => column.name), new Map(context.fieldReferences.map((item) => [item.current_column, item.preferred_name])), Boolean(hooks.referenceMarkdown?.trim()), options);
     const columnSuggestions = parsed.columns.map((item) => {
       const column = task.columns.find((candidate) => candidate.name === item.column_name);
       if (!column) throw new BadRequestException("LLM response does not match selected columns");
@@ -104,12 +103,12 @@ export class GovernanceAiService {
     const historical = await this.references.build(task.columns);
     return { table: { project: task.metaTable.metaProject.name, name: task.metaTable.name, comment: task.metaTable.comment, type: task.metaTable.type }, columns: task.columns.map((column) => ({ name: column.name, type: column.dataType, comment: column.comment, is_partition: column.isPartition })), ...historical };
   }
-  private async prompt(context: Awaited<ReturnType<GovernanceAiService["context"]>>, referenceMarkdown?: string) {
+  private async prompt(context: Awaited<ReturnType<GovernanceAiService["context"]>>, referenceMarkdown?: string, options: Awaited<ReturnType<SystemSettingsService["governanceOptions"]>> = DEFAULT_GOVERNANCE_OPTIONS) {
     const { prompt: system } = await this.settings.aiPrompt();
     const markdown = referenceMarkdown?.trim();
-    return { system, user: JSON.stringify({ current_table_context: context, data_domain_options: [...dataDomains], supplementary_business_reference: markdown, calculated_metric_policy: markdown ? "仅建议有 Markdown 明确依据的计算指标，不设数量上限" : "计算指标可省略，最多 5 条", required_response_contract: { table: "data_domain 必须从 data_domain_options 选择或为null；business_name、description、grain、permission_column_name（已选字段或null）、permission_relation（枚举或null；与权限字段成对）。grain 必须仅使用当前已选字段的物理字段名，并使用英文逗号 , 分隔。", columns: "每个当前字段一项：column_name、metric_name、semantic_type、aggregation、unit、groupable、candidate_value_queryable、label_description、confidence、reason；维度和标签的两个开关缺省为true，其他类型为false", metrics: "name、formula、unit、confidence、reason" } }) };
+    return { system, user: JSON.stringify({ current_table_context: context, data_domain_options: options.dataDomains, permission_relation_options: options.permissionRelations, supplementary_business_reference: markdown, calculated_metric_policy: markdown ? "仅建议有 Markdown 明确依据的计算指标，不设数量上限" : "计算指标可省略，最多 5 条", required_response_contract: { table: "data_domain 必须从 data_domain_options 选择或为null；permission_relation 必须从 permission_relation_options 选择或为null；business_name、description、grain、permission_column_name（已选字段或null）与权限关系需成对。grain 必须仅使用当前已选字段的物理字段名，并使用英文逗号 , 分隔。", columns: "每个当前字段一项：column_name、metric_name、semantic_type、aggregation、unit、groupable、candidate_value_queryable、label_description、confidence、reason；维度和标签的两个开关缺省为true，其他类型为false", metrics: "name、formula、unit、confidence、reason" } }) };
   }
-  private parse(raw: string, names: string[], preferredNames: Map<string, string>, hasReferenceMarkdown: boolean): Parsed {
+  private parse(raw: string, names: string[], preferredNames: Map<string, string>, hasReferenceMarkdown: boolean, options: Awaited<ReturnType<SystemSettingsService["governanceOptions"]>> = DEFAULT_GOVERNANCE_OPTIONS): Parsed {
     const data = parseJsonObject(raw);
     const result = data as Parsed;
     if (!result?.table || !Array.isArray(result.columns) || result.columns.length !== names.length || !result.table.business_name || !result.table.description) throw new BadRequestException("LLM response has an invalid suggestion structure");
@@ -128,11 +127,11 @@ export class GovernanceAiService {
     if (columns.some((item) => !item.metric_name || !item.semantic_type)) throw new BadRequestException(`LLM response has an invalid suggestion for column: ${columns.find((item) => !item.metric_name || !item.semantic_type)?.column_name}`);
     const rawTable = result.table as Record<string, unknown>;
     const requestedDataDomain = nullableText(rawTable.data_domain ?? rawTable.dataDomain);
-    const dataDomain = requestedDataDomain && dataDomains.has(requestedDataDomain) ? requestedDataDomain : null;
+    const dataDomain = requestedDataDomain && options.dataDomains.includes(requestedDataDomain) ? requestedDataDomain : null;
     const permissionColumnName = nullableText(rawTable.permission_column_name ?? rawTable.permissionColumnName);
     const requestedPermissionRelation = nullableText(rawTable.permission_relation ?? rawTable.permissionRelation);
     const resolvedPermissionColumnName = permissionColumnName ? selected.get(permissionColumnName.toLowerCase()) : null;
-    const permissionRelation = requestedPermissionRelation && permissionRelations.has(requestedPermissionRelation) ? requestedPermissionRelation : null;
+    const permissionRelation = requestedPermissionRelation && options.permissionRelations.includes(requestedPermissionRelation) ? requestedPermissionRelation : null;
     const permission = resolvedPermissionColumnName && permissionRelation ? { columnName: resolvedPermissionColumnName, relation: permissionRelation } : null;
     const metrics = Array.isArray(result.metrics) ? result.metrics : [];
     if (!hasReferenceMarkdown && metrics.length > 5) throw new BadRequestException("LLM returned more than 5 calculated metric suggestions");

@@ -11,7 +11,7 @@ export function DataTable({
   return (
     <div
       className={cn(
-        "rounded-xl border border-[#eef2f7] bg-white",
+        "shadcn-scrollbar rounded-xl border border-[#eef2f7] bg-white",
         scrollable ? "w-full overflow-x-auto" : "w-max min-w-full overflow-visible",
         className,
       )}

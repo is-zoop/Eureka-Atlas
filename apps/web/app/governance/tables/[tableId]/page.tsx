@@ -104,8 +104,7 @@ const types: ColumnDraft["semanticType"][] = [
   "LABEL",
   "PARTITION",
 ];
-const permissionRelations = ["品牌项目名", "财务店铺名称", "ERP店铺名称", "平台店铺名称"];
-const dataDomains = ["商品企划", "设计研发", "采购管理", "销售管理", "商品运营", "仓库管理", "客服管理", "财务管理", "人资管理", "运维管理"];
+type GovernanceOptions = { dataDomains: string[]; permissionRelations: string[] };
 const labels = {
   METRIC: "指标",
   DIMENSION: "维度",
@@ -209,6 +208,7 @@ function WorkspaceContent() {
   const [editingMetricId, setEditingMetricId] = useState<string | null>(null);
   const [activeSemanticTab, setActiveSemanticTab] = useState("table");
   const [metricAddSignal, setMetricAddSignal] = useState(0);
+  const [governanceOptions, setGovernanceOptions] = useState<GovernanceOptions>({ dataDomains: [], permissionRelations: [] });
   const [formulaInsertion, setFormulaInsertion] = useState<{
     revision: number;
     field: string;
@@ -220,6 +220,11 @@ function WorkspaceContent() {
     setSelectedColumns(result.selectedColumns);
     setDraft(result.draft);
   };
+  useEffect(() => {
+    void api<GovernanceOptions>("/settings/governance-options")
+      .then(setGovernanceOptions)
+      .catch((cause: Error) => setError(cause.message));
+  }, []);
   useEffect(() => {
     if (!tableId) return;
     let cancelled = false;
@@ -496,7 +501,7 @@ function WorkspaceContent() {
       </main>
     );
   return (
-    <main className="flex h-[calc(100vh-104px)] min-h-0 flex-col overflow-hidden">
+    <main className="flex h-[calc(100vh-104px)] min-h-0 min-w-0 flex-col overflow-hidden">
       <Menubar className="mb-4 min-h-0 rounded-none border-0 bg-transparent px-0 py-0 shadow-none">
         <Button asChild size="sm" variant="outline"><Link href={returnHref}><ArrowLeft className="mr-1.5 h-4 w-4" />返回</Link></Button>
         <div className="flex flex-wrap gap-2">
@@ -563,7 +568,7 @@ function WorkspaceContent() {
           setNotice("AI 建议已生成，可逐项采用");
         }}
       />
-      <div className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(320px,.8fr)_minmax(0,1.7fr)]">
+      <div className="grid min-h-0 min-w-0 flex-1 gap-5 xl:grid-cols-[minmax(320px,.8fr)_minmax(0,1.7fr)]">
         <Card className="min-h-0 overflow-hidden rounded-lg">
           <CardContent className="flex h-full min-h-0 flex-col">
             <div className="mb-4 flex items-center justify-between">
@@ -656,7 +661,7 @@ function WorkspaceContent() {
                     <FieldGroup className="grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                       <Field>
                         <FieldLabel>数据域</FieldLabel>
-                        <div className="space-y-1"><MultiCombobox className="h-10 w-full min-w-0" multiple={false} value={draft.table.dataDomain ? [draft.table.dataDomain] : []} onValueChange={(value) => updateTable("dataDomain", value[0] ?? null)} placeholder="选择数据域" options={dataDomains.map((value) => ({ value, label: value }))} />{showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.dataDomain} emptyText="AI 未能判断，请人工选择" onAdopt={() => adoptTable("dataDomain")} />}</div>
+                        <div className="space-y-1"><MultiCombobox className="h-10 w-full min-w-0" multiple={false} value={draft.table.dataDomain ? [draft.table.dataDomain] : []} onValueChange={(value) => updateTable("dataDomain", value[0] ?? null)} placeholder="选择数据域" options={governanceOptions.dataDomains.map((value) => ({ value, label: value }))} />{showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.dataDomain} emptyText="AI 未能判断，请人工选择" onAdopt={() => adoptTable("dataDomain")} />}</div>
                       </Field>
                       <Field>
                         <FieldLabel>业务名称</FieldLabel>
@@ -724,7 +729,7 @@ function WorkspaceContent() {
                       请从左侧选择字段后在此编辑字段语义。
                   </div>
                 ) : (
-                  <ScrollArea className="h-full min-w-0">
+                  <div className="semantic-groups-scroll h-full min-w-0 overflow-y-auto">
                     <div className="space-y-3 pr-2">
                       {groupedColumns
                         .filter((group) => group.items.length)
@@ -867,7 +872,7 @@ function WorkspaceContent() {
                           </section>
                         ))}
                     </div>
-                  </ScrollArea>
+                  </div>
                 )}
               </TabsContent>
               <TabsContent
@@ -912,7 +917,7 @@ function WorkspaceContent() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-1" role="group" aria-label="权限映射关系">
-              {permissionRelations.map((relation) => (
+              {governanceOptions.permissionRelations.map((relation) => (
                 <label
                   key={relation}
                   className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-[13px] text-slate-700 hover:bg-slate-50"
