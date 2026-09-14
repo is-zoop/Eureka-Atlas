@@ -1,56 +1,81 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Plus, RotateCcw, Save, Settings2, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Pencil, Plus, Save, Trash2 } from "lucide-react";
 import { FloatingAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Table, TableCell, TableHead } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 
-type GovernanceOptions = { dataDomains: string[]; permissionRelations: string[] };
-type ListKey = keyof GovernanceOptions;
-const labels: Record<ListKey, { title: string; description: string; add: string }> = {
-  dataDomains: { title: "数据域配置", description: "用于表语义中的数据域选择及 AI 建议范围。", add: "添加数据域" },
-  permissionRelations: { title: "权限映射关系配置", description: "用于权限字段的映射关系选择及 AI 建议范围。", add: "添加映射关系" },
+type ListKey = "dataDomains" | "permissionRelations";
+type OptionRecord = { id: string; value: string; description: string; createdAt: string; updatedAt: string; updatedBy: string };
+type GovernanceOptionRecords = Record<ListKey, OptionRecord[]>;
+type Editing = { key: ListKey; item?: OptionRecord };
+const labels: Record<ListKey, { add: string; type: "DATA_DOMAIN" | "PERMISSION_RELATION" }> = {
+  dataDomains: { add: "添加数据域", type: "DATA_DOMAIN" },
+  permissionRelations: { add: "添加映射关系", type: "PERMISSION_RELATION" },
 };
-const clone = (value: GovernanceOptions): GovernanceOptions => ({ dataDomains: [...value.dataDomains], permissionRelations: [...value.permissionRelations] });
+const dateTime = new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short", hour12: false, timeZone: "UTC" });
+const formatDate = (value: string) => dateTime.format(new Date(value));
 
 export default function SettingsPage() {
-  const [saved, setSaved] = useState<GovernanceOptions | null>(null);
-  const [draft, setDraft] = useState<GovernanceOptions | null>(null);
+  const [records, setRecords] = useState<GovernanceOptionRecords | null>(null);
+  const [activeKey, setActiveKey] = useState<ListKey>("dataDomains");
   const [message, setMessage] = useState<{ error: boolean; text: string } | null>(null);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { void api<GovernanceOptions>("/settings/governance-options").then((options) => { setSaved(options); setDraft(clone(options)); }).catch((error: Error) => setMessage({ error: true, text: error.message })); }, []);
-  const validation = useMemo(() => {
-    if (!draft) return "";
-    for (const key of Object.keys(labels) as ListKey[]) {
-      const items = draft[key].map((item) => item.trim());
-      if (items.some((item) => !item)) return `${labels[key].title}不能包含空值`;
-      if (new Set(items).size !== items.length) return `${labels[key].title}不能包含重复项`;
-    }
-    return "";
-  }, [draft]);
-  const changed = Boolean(saved && draft && JSON.stringify(saved) !== JSON.stringify(draft));
-  const updateItem = (key: ListKey, index: number, value: string) => setDraft((current) => current ? { ...current, [key]: current[key].map((item, itemIndex) => itemIndex === index ? value : item) } : current);
-  const addItem = (key: ListKey) => setDraft((current) => current ? { ...current, [key]: [...current[key], ""] } : current);
-  const removeItem = (key: ListKey, index: number) => setDraft((current) => current ? { ...current, [key]: current[key].filter((_, itemIndex) => itemIndex !== index) } : current);
-  const reset = () => { if (saved) { setDraft(clone(saved)); setMessage(null); } };
-  const save = async () => {
-    if (!draft || validation) { if (validation) setMessage({ error: true, text: validation }); return; }
-    setSaving(true);
-    try {
-      const options = await api<GovernanceOptions>("/settings/governance-options", { method: "PUT", body: JSON.stringify({ dataDomains: draft.dataDomains.map((item) => item.trim()), permissionRelations: draft.permissionRelations.map((item) => item.trim()) }) });
-      setSaved(options); setDraft(clone(options)); setMessage({ error: false, text: "治理配置已保存。" });
-    } catch (error) { setMessage({ error: true, text: error instanceof Error ? error.message : "保存失败" }); } finally { setSaving(false); }
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [deleting, setDeleting] = useState<OptionRecord | null>(null);
+  const [form, setForm] = useState({ value: "", description: "" });
+  const [working, setWorking] = useState(false);
+  const load = async () => {
+    try { setRecords(await api<GovernanceOptionRecords>("/settings/governance-options")); }
+    catch (cause) { setMessage({ error: true, text: cause instanceof Error ? cause.message : "加载配置失败" }); }
   };
-  if (!draft) return <main className="mx-auto max-w-3xl py-12 text-center text-sm text-slate-500">正在加载系统设置…</main>;
-  return <main className="mx-auto max-w-3xl py-10">
+  useEffect(() => {
+    let cancelled = false;
+    void api<GovernanceOptionRecords>("/settings/governance-options")
+      .then((value) => { if (!cancelled) setRecords(value); })
+      .catch((cause: Error) => { if (!cancelled) setMessage({ error: true, text: cause.message }); });
+    return () => { cancelled = true; };
+  }, []);
+  const openCreate = (key: ListKey) => { setForm({ value: "", description: "" }); setEditing({ key }); };
+  const openEdit = (key: ListKey, item: OptionRecord) => { setForm({ value: item.value, description: item.description }); setEditing({ key, item }); };
+  const save = async () => {
+    if (!editing) return;
+    const value = form.value.trim();
+    if (!value) { setMessage({ error: true, text: "字段不能为空" }); return; }
+    setWorking(true);
+    try {
+      if (editing.item) await api(`/settings/governance-options/${editing.item.id}`, { method: "PATCH", body: JSON.stringify({ value, description: form.description.trim() }) });
+      else await api("/settings/governance-options", { method: "POST", body: JSON.stringify({ type: labels[editing.key].type, value, description: form.description.trim() }) });
+      setEditing(null); setMessage({ error: false, text: editing.item ? "配置已更新。" : "配置已添加。" }); await load();
+    } catch (cause) { setMessage({ error: true, text: cause instanceof Error ? cause.message : "保存失败" }); }
+    finally { setWorking(false); }
+  };
+  const remove = async () => {
+    if (!deleting) return;
+    setWorking(true);
+    try { await api(`/settings/governance-options/${deleting.id}`, { method: "DELETE" }); setDeleting(null); setMessage({ error: false, text: "配置已删除。" }); await load(); }
+    catch (cause) { setMessage({ error: true, text: cause instanceof Error ? cause.message : "删除失败" }); }
+    finally { setWorking(false); }
+  };
+  if (!records) return <main className="flex h-[calc(100vh-104px)] min-h-0 flex-col overflow-hidden"><div className="flex h-full min-h-0 flex-1 items-center justify-center p-4 text-sm text-slate-500">正在加载配置…</div></main>;
+  return <main className="flex h-[calc(100vh-104px)] min-h-0 flex-col overflow-hidden">
     {message && <FloatingAlert type={message.error ? "error" : "success"}>{message.text}</FloatingAlert>}
-    <div className="mb-6 flex items-start gap-3"><Settings2 className="mt-0.5 size-5 text-slate-500" /><div><h1 className="text-lg font-semibold">系统设置</h1><p className="mt-1 text-sm text-slate-500">维护治理任务中的数据域和权限映射关系。</p></div></div>
-    <Tabs defaultValue="dataDomains"><TabsList><TabsTrigger value="dataDomains">数据域配置</TabsTrigger><TabsTrigger value="permissionRelations">权限映射关系配置</TabsTrigger></TabsList>
-      {(Object.keys(labels) as ListKey[]).map((key) => <TabsContent key={key} value={key} className="mt-4"><section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-start justify-between gap-4"><div><h2 className="font-semibold">{labels[key].title}</h2><p className="mt-1 text-sm text-slate-500">{labels[key].description}</p></div><Button type="button" size="sm" variant="outline" onClick={() => addItem(key)}><Plus className="size-3.5" />{labels[key].add}</Button></div><div className="mt-5 space-y-2">{draft[key].length ? draft[key].map((item, index) => <div key={`${key}-${index}`} className="flex items-center gap-2"><Input value={item} onChange={(event) => updateItem(key, index, event.target.value)} aria-label={`${labels[key].title} ${index + 1}`} /><Button type="button" size="icon-sm" variant="outline" className="text-rose-600 hover:bg-rose-50 hover:text-rose-700" onClick={() => removeItem(key, index)} aria-label={`删除${item || labels[key].title}`}><Trash2 className="size-4" /></Button></div>) : <p className="rounded-md bg-slate-50 px-3 py-5 text-center text-sm text-slate-500">暂无配置项</p>}</div></section></TabsContent>)}</Tabs>
-    <div className="mt-6 flex items-center justify-end gap-2 border-t border-slate-200 pt-5"><Button type="button" variant="outline" disabled={!changed || saving} onClick={reset}><RotateCcw className="size-4" />取消更改</Button><Button type="button" disabled={!changed || Boolean(validation) || saving} onClick={() => void save()}><Save className="size-4" />{saving ? "保存中…" : "保存配置"}</Button></div>
-    {validation && <p className="mt-3 text-right text-sm text-rose-600">{validation}</p>}
+    <Tabs value={activeKey} onValueChange={(value) => setActiveKey(value as ListKey)} className="flex h-full min-h-0 flex-1 flex-col p-4">
+      <div className="flex items-center justify-between gap-3"><TabsList><TabsTrigger value="dataDomains">数据域配置</TabsTrigger><TabsTrigger value="permissionRelations">权限映射关系配置</TabsTrigger></TabsList><Button type="button" size="sm" onClick={() => openCreate(activeKey)}><Plus className="size-3.5" />{labels[activeKey].add}</Button></div>
+      {(Object.keys(labels) as ListKey[]).map((key) => <TabsContent key={key} value={key} className="mt-3 min-h-0 flex-1 overflow-hidden data-[state=active]:flex">
+        <div className="min-h-0 flex-1 overflow-hidden"><Table className="min-w-[820px]">
+            <thead><tr><TableHead>字段</TableHead><TableHead>描述</TableHead><TableHead>创建时间</TableHead><TableHead>修改时间</TableHead><TableHead>最后修改人</TableHead><TableHead className="w-32">操作</TableHead></tr></thead>
+            <tbody>{records[key].length ? records[key].map((item) => <tr key={item.id} className="hover:bg-slate-50"><TableCell className="font-medium text-slate-900">{item.value}</TableCell><TableCell className="max-w-[280px] whitespace-pre-wrap">{item.description || "-"}</TableCell><TableCell className="whitespace-nowrap">{formatDate(item.createdAt)}</TableCell><TableCell className="whitespace-nowrap">{formatDate(item.updatedAt)}</TableCell><TableCell>{item.updatedBy}</TableCell><TableCell><div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => openEdit(key, item)}><Pencil className="size-3.5" />编辑</Button><Button type="button" size="sm" variant="outline" className="text-rose-600 hover:bg-rose-50 hover:text-rose-700" onClick={() => setDeleting(item)}><Trash2 className="size-3.5" />删除</Button></div></TableCell></tr>) : <tr><TableCell colSpan={6} className="py-10 text-center text-slate-500">暂无配置项</TableCell></tr>}</tbody>
+          </Table></div>
+      </TabsContent>)}
+    </Tabs>
+    <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && !working && setEditing(null)}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>{editing?.item ? "编辑配置" : "添加配置"}</DialogTitle><DialogDescription>字段不能为空，同一配置类型下不能重复。</DialogDescription></DialogHeader><div className="space-y-4"><Field><FieldLabel>字段</FieldLabel><Input autoFocus value={form.value} onChange={(event) => setForm((current) => ({ ...current, value: event.target.value }))} placeholder="请输入字段" /></Field><Field><FieldLabel>描述</FieldLabel><Textarea className="min-h-24" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} placeholder="请输入描述（可选）" /></Field></div><DialogFooter><Button type="button" variant="outline" disabled={working} onClick={() => setEditing(null)}>取消</Button><Button type="button" disabled={working} onClick={() => void save()}><Save className="size-4" />{working ? "保存中…" : "保存"}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && !working && setDeleting(null)}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>删除配置</DialogTitle><DialogDescription>删除“{deleting?.value}”后，历史治理记录会保留该值，但不能再用于新的选择或 AI 建议。</DialogDescription></DialogHeader><DialogFooter><Button type="button" variant="outline" disabled={working} onClick={() => setDeleting(null)}>取消</Button><Button type="button" variant="destructive" disabled={working} onClick={() => void remove()}>{working ? "删除中…" : "删除"}</Button></DialogFooter></DialogContent></Dialog>
   </main>;
 }

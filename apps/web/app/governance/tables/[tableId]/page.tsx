@@ -104,6 +104,8 @@ const types: ColumnDraft["semanticType"][] = [
   "LABEL",
   "PARTITION",
 ];
+type GovernanceOptionRecord = { id: string; value: string };
+type GovernanceOptionRecords = { dataDomains: GovernanceOptionRecord[]; permissionRelations: GovernanceOptionRecord[] };
 type GovernanceOptions = { dataDomains: string[]; permissionRelations: string[] };
 const labels = {
   METRIC: "指标",
@@ -221,8 +223,11 @@ function WorkspaceContent() {
     setDraft(result.draft);
   };
   useEffect(() => {
-    void api<GovernanceOptions>("/settings/governance-options")
-      .then(setGovernanceOptions)
+    void api<GovernanceOptionRecords>("/settings/governance-options")
+      .then((options) => setGovernanceOptions({
+        dataDomains: options.dataDomains.map((item) => item.value),
+        permissionRelations: options.permissionRelations.map((item) => item.value),
+      }))
       .catch((cause: Error) => setError(cause.message));
   }, []);
   useEffect(() => {

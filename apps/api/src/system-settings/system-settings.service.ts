@@ -1,17 +1,17 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma, prisma } from "@eureka-atlas/database";
 import { DEFAULT_AI_SYSTEM_PROMPT } from "../governance/ai-prompt";
 
 const aiPromptKey = "ai_system_prompt";
-const dataDomainsKey = "governance_data_domains";
-const permissionRelationsKey = "governance_permission_relations";
 export const DEFAULT_GOVERNANCE_OPTIONS = {
   dataDomains: ["商品企划", "设计研发", "采购管理", "销售管理", "商品运营", "仓库管理", "客服管理", "财务管理", "人资管理", "运维管理"],
   permissionRelations: ["品牌项目名", "财务店铺名称", "ERP店铺名称", "平台店铺名称"],
 };
 
 type GovernanceOptions = typeof DEFAULT_GOVERNANCE_OPTIONS;
-
+type GovernanceOptionRecord = { id: string; value: string; description: string; createdAt: Date; updatedAt: Date; updatedBy: string };
+type GovernanceOptionGroups = { dataDomains: GovernanceOptionRecord[]; permissionRelations: GovernanceOptionRecord[] };
+type GovernanceOptionType = "DATA_DOMAIN" | "PERMISSION_RELATION";
 @Injectable()
 export class SystemSettingsService {
   async aiPrompt() {
@@ -30,36 +30,54 @@ export class SystemSettingsService {
     return this.aiPrompt();
   }
   async governanceOptions(): Promise<GovernanceOptions> {
-    const rows = await prisma.$queryRaw<Array<{ key: string; value: string }>>(Prisma.sql`SELECT "key", "value" FROM "system_setting" WHERE "key" IN (${dataDomainsKey}, ${permissionRelationsKey})`);
-    const values = new Map(rows.map((row) => [row.key, row.value]));
+    const records = await this.governanceOptionRecords();
     return {
-      dataDomains: this.readList(values.get(dataDomainsKey), DEFAULT_GOVERNANCE_OPTIONS.dataDomains),
-      permissionRelations: this.readList(values.get(permissionRelationsKey), DEFAULT_GOVERNANCE_OPTIONS.permissionRelations),
+      dataDomains: records.dataDomains.map((item) => item.value),
+      permissionRelations: records.permissionRelations.map((item) => item.value),
     };
   }
-  async saveGovernanceOptions(input: unknown): Promise<GovernanceOptions> {
+  async governanceOptionRecords(): Promise<GovernanceOptionGroups> {
+    const rows = await prisma.$queryRaw<Array<GovernanceOptionRecord & { type: GovernanceOptionType }>>(Prisma.sql`SELECT "id", "type", "value", "description", "createdAt", "updatedAt", "updatedBy" FROM "governance_option" ORDER BY "type", "createdAt"`);
+    return {
+      dataDomains: rows.filter((item) => item.type === "DATA_DOMAIN"),
+      permissionRelations: rows.filter((item) => item.type === "PERMISSION_RELATION"),
+    };
+  }
+  async createGovernanceOption(input: unknown) {
+    const { type, value, description } = this.readOptionInput(input, true);
+    await this.ensureUnique(type, value);
+    const id = crypto.randomUUID();
+    await prisma.$executeRaw(Prisma.sql`INSERT INTO "governance_option" ("id", "type", "value", "description", "updatedBy", "createdAt", "updatedAt") VALUES (${id}, ${type}::"GovernanceOptionType", ${value}, ${description}, 'admin', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`);
+    return this.option(id);
+  }
+  async updateGovernanceOption(id: string, input: unknown) {
+    const { value, description } = this.readOptionInput(input, false);
+    const current = await this.option(id);
+    await this.ensureUnique(current.type, value, id);
+    await prisma.$executeRaw(Prisma.sql`UPDATE "governance_option" SET "value" = ${value}, "description" = ${description}, "updatedBy" = 'admin', "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ${id}`);
+    return this.option(id);
+  }
+  async deleteGovernanceOption(id: string) {
+    const deleted = await prisma.$executeRaw(Prisma.sql`DELETE FROM "governance_option" WHERE "id" = ${id}`);
+    if (!deleted) throw new NotFoundException("Governance option not found");
+    return { id };
+  }
+  private readOptionInput(input: unknown, includeType: boolean) {
     const body = input && typeof input === "object" ? input as Record<string, unknown> : {};
-    const dataDomains = this.validateList(body.dataDomains, "dataDomains");
-    const permissionRelations = this.validateList(body.permissionRelations, "permissionRelations");
-    await prisma.$transaction([
-      prisma.$executeRaw(Prisma.sql`INSERT INTO "system_setting" ("id", "key", "value", "createdAt", "updatedAt") VALUES (${crypto.randomUUID()}, ${dataDomainsKey}, ${JSON.stringify(dataDomains)}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = CURRENT_TIMESTAMP`),
-      prisma.$executeRaw(Prisma.sql`INSERT INTO "system_setting" ("id", "key", "value", "createdAt", "updatedAt") VALUES (${crypto.randomUUID()}, ${permissionRelationsKey}, ${JSON.stringify(permissionRelations)}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = CURRENT_TIMESTAMP`),
-    ]);
-    return { dataDomains, permissionRelations };
+    const value = typeof body.value === "string" ? body.value.trim() : "";
+    if (!value) throw new BadRequestException("字段不能为空");
+    const description = typeof body.description === "string" ? body.description.trim() : "";
+    const type: GovernanceOptionType | undefined = body.type === "DATA_DOMAIN" || body.type === "PERMISSION_RELATION" ? body.type : undefined;
+    if (includeType && !type) throw new BadRequestException("配置类型无效");
+    return { type: type as GovernanceOptionType, value, description };
   }
-  private readList(value: string | undefined, fallback: string[]) {
-    try {
-      const parsed = JSON.parse(value ?? "") as unknown;
-      return Array.isArray(parsed) && parsed.every((item) => typeof item === "string" && item.trim()) && new Set(parsed.map((item) => item.trim())).size === parsed.length
-        ? parsed.map((item) => item.trim())
-        : fallback;
-    } catch { return fallback; }
+  private async option(id: string) {
+    const rows = await prisma.$queryRaw<GovernanceOptionRecord[]>(Prisma.sql`SELECT "id", "value", "description", "createdAt", "updatedAt", "updatedBy", "type" FROM "governance_option" WHERE "id" = ${id} LIMIT 1`);
+    if (!rows[0]) throw new NotFoundException("Governance option not found");
+    return rows[0] as GovernanceOptionRecord & { type: GovernanceOptionType };
   }
-  private validateList(value: unknown, field: string) {
-    if (!Array.isArray(value)) throw new BadRequestException(`${field} must be an array`);
-    const items = value.map((item) => typeof item === "string" ? item.trim() : "");
-    if (items.some((item) => !item)) throw new BadRequestException(`${field} cannot contain empty values`);
-    if (new Set(items).size !== items.length) throw new BadRequestException(`${field} cannot contain duplicate values`);
-    return items;
+  private async ensureUnique(type: GovernanceOptionType, value: string, exceptId?: string) {
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "governance_option" WHERE "type" = ${type}::"GovernanceOptionType" AND "value" = ${value} ${exceptId ? Prisma.sql`AND "id" <> ${exceptId}` : Prisma.empty} LIMIT 1`);
+    if (rows.length) throw new BadRequestException("同一配置类型下字段不能重复");
   }
 }

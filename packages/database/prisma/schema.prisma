@@ -169,6 +169,25 @@ model SystemSetting {
   @@map("system_setting")
 }
 
+enum GovernanceOptionType {
+  DATA_DOMAIN
+  PERMISSION_RELATION
+}
+
+model GovernanceOption {
+  id          String               @id @default(cuid())
+  type        GovernanceOptionType
+  value       String
+  description String               @default("")
+  updatedBy   String               @default("admin")
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  @@unique([type, value])
+  @@index([type])
+  @@map("governance_option")
+}
+
 model ModelProvider {
   id                  String            @id @default(cuid())
   name                String            @unique
