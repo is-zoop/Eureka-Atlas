@@ -1,4 +1,6 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
+// Keep browser requests on the current origin. Next.js proxies them to the API
+// server, so LAN clients never resolve `localhost` to their own machine.
+const API_BASE_URL = "/api";
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers: { "Content-Type": "application/json", ...options?.headers }, cache: "no-store" });
   if (!response.ok) {
@@ -7,5 +9,6 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
     Object.assign(error, body);
     throw error;
   }
-  return response.json();
+  const body = await response.text();
+  return (body ? JSON.parse(body) : null) as T;
 }

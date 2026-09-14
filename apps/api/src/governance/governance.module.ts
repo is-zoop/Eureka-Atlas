@@ -7,6 +7,9 @@ import { PackageModule } from "../package/package.module";
 import { GovernanceWorkspaceService } from "./governance-workspace.service";
 import { MetricFormulaService } from "./metric-formula.service";
 import { GovernanceGenerationService } from "./governance-generation.service";
+import { SemanticReferenceService } from "./semantic-reference.service";
+import { SystemSettingsModule } from "../system-settings/system-settings.module";
+import { SemanticModule } from "../semantic/semantic.module";
 
-@Module({ imports: [LlmModule, PackageModule], controllers: [GovernanceController, GovernanceWorkspaceController], providers: [GovernanceService, GovernanceAiService, GovernanceWorkspaceService, MetricFormulaService, GovernanceGenerationService] })
+@Module({ imports: [LlmModule, PackageModule, SystemSettingsModule, SemanticModule], controllers: [GovernanceController, GovernanceWorkspaceController], providers: [GovernanceService, GovernanceAiService, GovernanceWorkspaceService, MetricFormulaService, GovernanceGenerationService, SemanticReferenceService] })
 export class GovernanceModule {}

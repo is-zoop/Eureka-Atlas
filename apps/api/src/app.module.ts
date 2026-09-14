@@ -7,6 +7,8 @@ import { PackageModule } from "./package/package.module";
 import { RuleModule } from "./rule/rule.module";
 import { SemanticModule } from "./semantic/semantic.module";
 import { HealthController } from "./common/health.controller";
+import { SystemSettingsModule } from "./system-settings/system-settings.module";
+import { ModelConfigModule } from "./model-config/model-config.module";
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { HealthController } from "./common/health.controller";
     PackageModule,
     LlmModule,
     RuleModule,
+    SystemSettingsModule,
+    ModelConfigModule,
   ],
   controllers: [HealthController],
 })

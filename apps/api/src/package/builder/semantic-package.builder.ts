@@ -3,10 +3,12 @@ import { ColumnSemanticType } from "@eureka-atlas/database";
 export type SemanticPackageContent = {
   table: {
     name: string;
+    data_domain: string | null;
     business_name: string;
     description: string;
     grain: string;
     permission_field: string | null;
+    permission_relation: string | null;
   };
   fields: Array<{
     column: string;
@@ -14,6 +16,9 @@ export type SemanticPackageContent = {
     type: ColumnSemanticType;
     aggregation: string | null;
     unit: string | null;
+    groupable: boolean;
+    candidate_value_queryable: boolean;
+    label_description: string | null;
   }>;
   metrics: Array<{
     name: string;
@@ -30,8 +35,10 @@ type PackageSource = {
   name: string;
   semantic: {
     businessName: string;
+    dataDomain: string | null;
     description: string;
     grain: string;
+    permissionRelation: string | null;
     permissionColumn: { name: string } | null;
   } | null;
   columns: Array<{
@@ -41,6 +48,9 @@ type PackageSource = {
       semanticType: ColumnSemanticType;
       aggregation: string | null;
       unit: string | null;
+      groupable: boolean;
+      candidateValueQueryable: boolean;
+      labelDescription: string | null;
     } | null;
   }>;
   semanticMetrics: Array<{
@@ -64,6 +74,9 @@ export function buildSemanticPackage(
             type: column.semantic.semanticType,
             aggregation: column.semantic.aggregation,
             unit: column.semantic.unit,
+            groupable: (column.semantic.semanticType === ColumnSemanticType.DIMENSION || column.semantic.semanticType === ColumnSemanticType.LABEL) && column.semantic.groupable,
+            candidate_value_queryable: (column.semantic.semanticType === ColumnSemanticType.DIMENSION || column.semantic.semanticType === ColumnSemanticType.LABEL) && column.semantic.candidateValueQueryable,
+            label_description: column.semantic.semanticType === ColumnSemanticType.LABEL ? column.semantic.labelDescription : null,
           },
         ]
       : [],
@@ -90,10 +103,12 @@ export function buildSemanticPackage(
   return {
     table: {
       name: source.name,
+      data_domain: source.semantic.dataDomain,
       business_name: source.semantic.businessName,
       description: source.semantic.description,
       grain: source.semantic.grain,
       permission_field: source.semantic.permissionColumn?.name ?? null,
+      permission_relation: source.semantic.permissionRelation,
     },
     fields,
     metrics,

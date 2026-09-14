@@ -1,0 +1,20 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Pencil, Save } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { api } from "@/lib/api";
+
+type DimensionDetail = { id: string; name: string; description: string; aliases: string[]; dataSource: string };
+type Form = { description: string; aliases: string; dataSource: string };
+const emptyForm: Form = { description: "", aliases: "", dataSource: "" };
+
+export function DimensionEditDialog({ dimensionId, onSaved }: { dimensionId: string; onSaved: (dimension: DimensionDetail) => void }) {
+  const [open, setOpen] = useState(false); const [dimension, setDimension] = useState<DimensionDetail | null>(null); const [form, setForm] = useState<Form>(emptyForm); const [error, setError] = useState(""); const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!open) return; let cancelled = false; setError(""); setDimension(null); void api<DimensionDetail>(`/semantic/dimensions/${dimensionId}`).then((value) => { if (cancelled) return; setDimension(value); setForm({ description: value.description, aliases: value.aliases.join(", "), dataSource: value.dataSource }); }).catch((cause: Error) => !cancelled && setError(cause.message)); return () => { cancelled = true; }; }, [dimensionId, open]);
+  const save = async () => { setSaving(true); setError(""); try { const value = await api<DimensionDetail>(`/semantic/dimensions/${dimensionId}`, { method: "PATCH", body: JSON.stringify({ description: form.description, aliases: form.aliases.split(",").map((item) => item.trim()).filter(Boolean), dataSource: form.dataSource }) }); onSaved(value); setOpen(false); } catch (cause) { setError(cause instanceof Error ? cause.message : "保存失败"); } finally { setSaving(false); } };
+  return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button size="sm" variant="outline"><Pencil className="h-3.5 w-3.5" />编辑</Button></DialogTrigger><DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl gap-0 overflow-hidden p-0"><DialogHeader className="border-b border-slate-100 px-6 py-5"><DialogTitle>编辑维度</DialogTitle><DialogDescription>维护维度的业务定义、检索别名和数据来源。</DialogDescription></DialogHeader><div className="max-h-[calc(100vh-15rem)] space-y-5 overflow-y-auto px-6 py-5">{!dimension && !error && <p className="py-8 text-center text-sm text-slate-500">正在加载维度信息…</p>}{error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}{dimension && <><div className="rounded-lg bg-slate-50 p-4 text-sm"><p className="text-xs text-slate-500">维度名称</p><p className="mt-1 font-semibold text-slate-900">{dimension.name}</p></div><label className="block text-sm font-medium text-slate-700">维度说明<Textarea className="mt-2 min-h-24 font-normal" placeholder="描述维度的业务含义。例如“商品类目用于标识商品所属的经营分类”。" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label><label className="block text-sm font-medium text-slate-700">别名（逗号分隔）<Input className="mt-2 font-normal" placeholder="填写常用简称、同义名称或英文名。例如“类目, Category”。" value={form.aliases} onChange={(event) => setForm((current) => ({ ...current, aliases: event.target.value }))} /></label><label className="block text-sm font-medium text-slate-700">数据来源<Input className="mt-2 font-normal" placeholder="填写维度的数据来源。例如“商品主数据表、类目映射表”。" value={form.dataSource} onChange={(event) => setForm((current) => ({ ...current, dataSource: event.target.value }))} /></label></>}</div><DialogFooter className="border-t border-slate-100 px-6 py-4"><DialogClose asChild><Button variant="outline">取消</Button></DialogClose><Button disabled={!dimension || saving} onClick={() => void save()}><Save className="h-4 w-4" />{saving ? "保存中…" : "保存"}</Button></DialogFooter></DialogContent></Dialog>;
+}

@@ -8,8 +8,39 @@ datasource db {
 }
 
 enum DataSourceStatus {
+  UNTESTED
   ACTIVE
   FAILED
+}
+
+enum DataSourceSyncStatus {
+  IDLE
+  RUNNING
+  SUCCEEDED
+  PARTIAL_FAILED
+  FAILED
+}
+
+enum DataSourceType {
+  MAXCOMPUTE
+  MYSQL
+  POSTGRESQL
+  SQLSERVER
+  ORACLE
+  MARIADB
+  SQLITE
+}
+
+enum StandardDataType {
+  STRING
+  INTEGER
+  DECIMAL
+  BOOLEAN
+  DATE
+  DATETIME
+  JSON
+  BINARY
+  UNKNOWN
 }
 
 enum AssetStatus {
@@ -46,27 +77,146 @@ enum ColumnSemanticType {
   PARTITION
 }
 
+enum SemanticCatalogStatus {
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SemanticMetricCatalogType {
+  ATOMIC
+  DERIVED
+  MIXED
+}
+
+enum ModelProviderKind {
+  BUILTIN
+  CUSTOM
+}
+
+enum ModelTestStatus {
+  UNTESTED
+  SUCCEEDED
+  FAILED
+}
+
 model DataSource {
   id                 String           @id @default(cuid())
   name               String           @unique
-  region             String
-  endpoint           String
-  defaultProject     String
-  accessKeyEncrypted String
-  secretKeyEncrypted String
-  status             DataSourceStatus @default(ACTIVE)
+  type               DataSourceType   @default(MAXCOMPUTE)
+  description        String?
+  connectionConfig   Json             @default("{}")
+  region             String           @default("")
+  endpoint           String           @default("")
+  defaultProject     String           @default("")
+  accessKeyEncrypted String           @default("")
+  secretKeyEncrypted String           @default("")
+  usernameEncrypted  String?
+  passwordEncrypted  String?
+  status             DataSourceStatus @default(UNTESTED)
+  syncStatus         DataSourceSyncStatus @default(IDLE)
+  syncTotalTables    Int              @default(0)
+  syncProcessedTables Int              @default(0)
+  syncSyncedTables   Int              @default(0)
+  syncSkippedTables  Int              @default(0)
+  syncFailedTables   Int              @default(0)
+  syncError          String?
+  syncStartedAt      DateTime?
+  syncFinishedAt     DateTime?
   lastTestedAt       DateTime?
+  lastSyncedAt       DateTime?
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   projects           MetaProject[]
+  syncSpaces         DataSourceSyncSpace[]
 
   @@map("data_source")
+}
+
+model DataSourceSyncSpace {
+  id                  String               @id @default(cuid())
+  dataSourceId        String
+  catalog             String               @default("")
+  schema              String               @default("")
+  name                String
+  description         String?
+  selected            Boolean              @default(false)
+  syncStatus          DataSourceSyncStatus @default(IDLE)
+  syncTotalTables     Int                  @default(0)
+  syncProcessedTables Int                  @default(0)
+  syncSyncedTables    Int                  @default(0)
+  syncSkippedTables   Int                  @default(0)
+  syncFailedTables    Int                  @default(0)
+  syncError           String?
+  syncStartedAt       DateTime?
+  syncFinishedAt      DateTime?
+  lastSyncedAt        DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  dataSource          DataSource           @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+
+  @@unique([dataSourceId, catalog, schema])
+  @@index([dataSourceId, selected])
+  @@map("data_source_sync_space")
+}
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_setting")
+}
+
+model ModelProvider {
+  id                  String            @id @default(cuid())
+  name                String            @unique
+  kind                ModelProviderKind
+  builtinId           String?           @unique
+  protocol            String
+  baseUrl             String?
+  apiKeyEncrypted     String?
+  headers             Json              @default("{}")
+  compat              Json              @default("{}")
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  models              ModelConfig[]
+
+  @@map("model_provider")
+}
+
+model ModelConfig {
+  id                  String        @id @default(cuid())
+  providerId          String
+  modelId             String
+  displayName         String?
+  protocol            String
+  contextWindow       Int           @default(128000)
+  maxTokens           Int           @default(16384)
+  reasoning           Boolean       @default(false)
+  headers             Json          @default("{}")
+  compat              Json          @default("{}")
+  cost                Json          @default("{}")
+  lastTestStatus      ModelTestStatus @default(UNTESTED)
+  lastTestedAt        DateTime?
+  lastTestLatencyMs   Int?
+  lastTestError       String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  provider            ModelProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, modelId])
+  @@index([providerId])
+  @@map("model_config")
 }
 
 model MetaProject {
   id           String      @id @default(cuid())
   dataSourceId String
   name         String
+  catalog      String      @default("")
+  schema       String      @default("")
   description  String?
   region       String
   status       AssetStatus @default(ACTIVE)
@@ -107,9 +257,16 @@ model MetaColumn {
   metaTableId String
   name        String
   dataType    String
+  normalizedType StandardDataType @default(UNKNOWN)
   comment     String?
   ordinal     Int
+  isNullable  Boolean?
+  defaultValue String?
+  isPrimaryKey Boolean @default(false)
   isPartition Boolean     @default(false)
+  length      Int?
+  precision   Int?
+  scale       Int?
   status      AssetStatus @default(ACTIVE)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
@@ -133,6 +290,7 @@ model GovernanceTask {
   metaTable       MetaTable            @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
   tableSuggestion AiTableSuggestion?
   columnSuggestions AiColumnSuggestion[]
+  metricSuggestions AiMetricSuggestion[]
   review           GovernanceReview?
   publishedTableSemantics  TableSemantic[]  @relation("PublishedTableSemantics")
   publishedColumnSemantics ColumnSemantic[] @relation("PublishedColumnSemantics")
@@ -164,9 +322,12 @@ model AiGeneration {
 model AiTableSuggestion {
   id           String @id @default(cuid())
   governanceTaskId String @unique
+  dataDomain   String?
   businessName String
   description  String
   grain        String?
+  permissionColumnId String?
+  permissionRelation String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   governanceTask GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
@@ -181,6 +342,9 @@ model AiColumnSuggestion {
   semanticType String
   aggregation  String?
   unit         String?
+  groupable    Boolean @default(false)
+  candidateValueQueryable Boolean @default(false)
+  labelDescription String?
   confidence   Float
   reason       String
   createdAt    DateTime @default(now())
@@ -190,6 +354,24 @@ model AiColumnSuggestion {
   @@unique([governanceTaskId, metaColumnId])
   @@index([metaColumnId])
   @@map("ai_column_suggestion")
+}
+
+model AiMetricSuggestion {
+  id               String         @id @default(cuid())
+  governanceTaskId String
+  name             String
+  formula          String
+  unit             String?
+  dependencies     Json
+  confidence       Float
+  reason           String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  governanceTask   GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([governanceTaskId, name])
+  @@index([governanceTaskId])
+  @@map("ai_metric_suggestion")
 }
 
 model GovernanceReview {
@@ -218,6 +400,7 @@ model SemanticMetric {
   updatedAt              DateTime       @updatedAt
   metaTable              MetaTable      @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
   sourceGovernanceTask   GovernanceTask @relation("PublishedSemanticMetrics", fields: [sourceGovernanceTaskId], references: [id], onDelete: Restrict)
+  catalogBindings        SemanticMetricBinding[]
 
   @@unique([metaTableId, name])
   @@index([sourceGovernanceTaskId])
@@ -228,10 +411,12 @@ model TableSemantic {
   id                     String         @id @default(cuid())
   metaTableId            String         @unique
   sourceGovernanceTaskId String
+  dataDomain             String?
   businessName           String
   description            String
   grain                  String
   permissionColumnId     String?
+  permissionRelation     String?
   publishedBy            String
   publishedAt            DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
@@ -252,14 +437,87 @@ model ColumnSemantic {
   semanticType           ColumnSemanticType
   aggregation            String?
   unit                   String?
+  groupable              Boolean            @default(false)
+  candidateValueQueryable Boolean            @default(false)
+  labelDescription       String?
   publishedBy            String
   publishedAt            DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
   metaColumn             MetaColumn         @relation(fields: [metaColumnId], references: [id], onDelete: Cascade)
   sourceGovernanceTask   GovernanceTask     @relation("PublishedColumnSemantics", fields: [sourceGovernanceTaskId], references: [id], onDelete: Restrict)
+  metricCatalogBindings  SemanticMetricBinding[]
+  dimensionCatalogBinding SemanticDimensionBinding?
 
   @@index([sourceGovernanceTaskId])
   @@map("column_semantic")
+}
+
+model SemanticMetricCatalog {
+  id          String                    @id @default(cuid())
+  normalizedName String                  @unique
+  name        String
+  description String                    @default("")
+  type        SemanticMetricCatalogType @default(ATOMIC)
+  unit        String?
+  aliases     Json                      @default("[]")
+  dataSource  String                    @default("")
+  editedAt    DateTime?
+  category    String?
+  owner       String?
+  usageNotes  String?
+  status      SemanticCatalogStatus     @default(PUBLISHED)
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+  bindings    SemanticMetricBinding[]
+
+  @@index([status, name])
+  @@map("semantic_metric_catalog")
+}
+
+model SemanticMetricBinding {
+  id                String                @id @default(cuid())
+  metricCatalogId   String
+  columnSemanticId  String?               @unique
+  semanticMetricId  String?               @unique
+  createdAt         DateTime              @default(now())
+  metricCatalog     SemanticMetricCatalog @relation(fields: [metricCatalogId], references: [id], onDelete: Cascade)
+  columnSemantic    ColumnSemantic?       @relation(fields: [columnSemanticId], references: [id], onDelete: Cascade)
+  semanticMetric    SemanticMetric?       @relation(fields: [semanticMetricId], references: [id], onDelete: Cascade)
+
+  @@index([metricCatalogId])
+  @@map("semantic_metric_binding")
+}
+
+model SemanticDimensionCatalog {
+  id          String                @id @default(cuid())
+  normalizedName String              @unique
+  name        String
+  description String                @default("")
+  aliases     Json                  @default("[]")
+  dataSource  String                @default("")
+  editedAt    DateTime?
+  category    String?
+  owner       String?
+  usageNotes  String?
+  status      SemanticCatalogStatus @default(PUBLISHED)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  bindings    SemanticDimensionBinding[]
+
+  @@index([status, name])
+  @@map("semantic_dimension_catalog")
+}
+
+model SemanticDimensionBinding {
+  id                 String                   @id @default(cuid())
+  dimensionCatalogId String
+  columnSemanticId   String                   @unique
+  createdAt          DateTime                 @default(now())
+  dimensionCatalog   SemanticDimensionCatalog @relation(fields: [dimensionCatalogId], references: [id], onDelete: Cascade)
+  columnSemantic     ColumnSemantic           @relation(fields: [columnSemanticId], references: [id], onDelete: Cascade)
+
+  @@index([dimensionCatalogId])
+  @@map("semantic_dimension_binding")
 }
 
 model SemanticPackage {

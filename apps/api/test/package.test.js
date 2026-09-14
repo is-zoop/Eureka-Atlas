@@ -8,10 +8,12 @@ test("builds the compact semantic package", () => {
   const result = buildSemanticPackage({
     name: "shop_sales",
     semantic: {
+      dataDomain: "销售管理",
       businessName: "店铺销售日报",
       description: "店铺每日销售",
       grain: "日期加店铺",
       permissionColumn: { name: "shop_id" },
+      permissionRelation: "平台店铺名称",
     },
     columns: [
       {
@@ -21,6 +23,9 @@ test("builds the compact semantic package", () => {
           semanticType: "DIMENSION",
           aggregation: null,
           unit: null,
+          groupable: true,
+          candidateValueQueryable: true,
+          labelDescription: null,
         },
       },
       {
@@ -30,6 +35,21 @@ test("builds the compact semantic package", () => {
           semanticType: "METRIC",
           aggregation: "SUM",
           unit: "元",
+          groupable: false,
+          candidateValueQueryable: false,
+          labelDescription: null,
+        },
+      },
+      {
+        name: "source_label",
+        semantic: {
+          metricName: "来源标签",
+          semanticType: "LABEL",
+          aggregation: null,
+          unit: null,
+          groupable: true,
+          candidateValueQueryable: true,
+          labelDescription: "标识订单来源渠道",
         },
       },
     ],
@@ -54,10 +74,12 @@ test("builds the compact semantic package", () => {
   assert.deepEqual(result, {
     table: {
       name: "shop_sales",
+      data_domain: "销售管理",
       business_name: "店铺销售日报",
       description: "店铺每日销售",
       grain: "日期加店铺",
       permission_field: "shop_id",
+      permission_relation: "平台店铺名称",
     },
     fields: [
       {
@@ -66,6 +88,9 @@ test("builds the compact semantic package", () => {
         type: "DIMENSION",
         aggregation: null,
         unit: null,
+        groupable: true,
+        candidate_value_queryable: true,
+        label_description: null,
       },
       {
         column: "gmv",
@@ -73,6 +98,19 @@ test("builds the compact semantic package", () => {
         type: "METRIC",
         aggregation: "SUM",
         unit: "元",
+        groupable: false,
+        candidate_value_queryable: false,
+        label_description: null,
+      },
+      {
+        column: "source_label",
+        name: "来源标签",
+        type: "LABEL",
+        aggregation: null,
+        unit: null,
+        groupable: true,
+        candidate_value_queryable: true,
+        label_description: "标识订单来源渠道",
       },
     ],
     metrics: [

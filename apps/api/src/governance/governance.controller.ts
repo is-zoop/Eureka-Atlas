@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Put, Query } from "@nestjs/common";
 import { GovernanceService } from "./governance.service";
 import { CreateWorkspaceInput, FormulaValidationInput, GovernanceWorkspaceService, WorkspaceInput } from "./governance-workspace.service";
 import { GenerationInput, GovernanceGenerationService } from "./governance-generation.service";
@@ -20,6 +20,9 @@ export class GovernanceWorkspaceController {
 
   @Post("formulas/validate")
   validateFormula(@Body() input: FormulaValidationInput) { return this.workspaceService.validateFormula(input); }
+
+  @Get("by-table/:tableId")
+  resolveForTable(@Param("tableId") tableId: string, @Query("task") taskId?: string) { return this.workspaceService.resolveForTable(tableId, taskId); }
 
   @Get(":id")
   get(@Param("id") id: string) { return this.workspaceService.get(id); }

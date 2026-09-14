@@ -14,12 +14,15 @@ import {
   normalizeSemanticType,
 } from "./semantic-classifier";
 import { MetricFormulaService } from "./metric-formula.service";
+import { SemanticCatalogService } from "../semantic/semantic-catalog.service";
 
 type TableDraft = {
+  dataDomain: string | null;
   businessName: string;
   description: string;
   grain: string;
   permissionColumnId: string | null;
+  permissionRelation: string | null;
 };
 type ColumnDraft = {
   metaColumnId: string;
@@ -27,6 +30,9 @@ type ColumnDraft = {
   semanticType: string;
   aggregation: string;
   unit: string;
+  groupable: boolean;
+  candidateValueQueryable: boolean;
+  labelDescription: string;
 };
 type MetricDraft = {
   id: string;
@@ -43,6 +49,24 @@ export type WorkspaceInput = {
 export type CreateWorkspaceInput = WorkspaceInput & { tableId?: string };
 export type FormulaValidationInput = { tableId?: string; selectedColumns?: string[]; formula?: string };
 const types = new Set(Object.values(ColumnSemanticType));
+const permissionRelations = new Set([
+  "品牌项目名",
+  "财务店铺名称",
+  "ERP店铺名称",
+  "平台店铺名称",
+]);
+const dataDomains = new Set([
+  "商品企划",
+  "设计研发",
+  "采购管理",
+  "销售管理",
+  "商品运营",
+  "仓库管理",
+  "客服管理",
+  "财务管理",
+  "人资管理",
+  "运维管理",
+]);
 const text = (value: unknown) =>
   typeof value === "string" ? value.trim() : "";
 
@@ -51,6 +75,7 @@ export class GovernanceWorkspaceService {
   constructor(
     private readonly packages: PackageService,
     private readonly formulas: MetricFormulaService,
+    private readonly catalogs: SemanticCatalogService,
   ) {}
   async create(input: CreateWorkspaceInput) {
     const tableId = text(input.tableId);
@@ -112,9 +137,12 @@ export class GovernanceWorkspaceService {
       ai: task.tableSuggestion
         ? {
             table: {
+              dataDomain: task.tableSuggestion.dataDomain,
               businessName: task.tableSuggestion.businessName,
               description: task.tableSuggestion.description,
               grain: task.tableSuggestion.grain ?? "",
+              permissionColumnId: task.tableSuggestion.permissionColumnId,
+              permissionRelation: task.tableSuggestion.permissionRelation,
             },
             columns: task.columnSuggestions.map((suggestion) => ({
               metaColumnId: suggestion.metaColumnId,
@@ -123,6 +151,20 @@ export class GovernanceWorkspaceService {
               semanticType: suggestion.semanticType,
               aggregation: suggestion.aggregation ?? "",
               unit: suggestion.unit ?? "",
+              groupable: suggestion.groupable,
+              candidateValueQueryable: suggestion.candidateValueQueryable,
+              labelDescription: suggestion.labelDescription,
+              confidence: suggestion.confidence,
+              reason: suggestion.reason,
+            })),
+            metrics: task.metricSuggestions.map((suggestion) => ({
+              id: suggestion.id,
+              name: suggestion.name,
+              formula: suggestion.formula,
+              unit: suggestion.unit ?? "",
+              dependencies: Array.isArray(suggestion.dependencies)
+                ? suggestion.dependencies
+                : [],
               confidence: suggestion.confidence,
               reason: suggestion.reason,
             })),
@@ -132,13 +174,39 @@ export class GovernanceWorkspaceService {
         table: task.metaTable.semantic
           ? {
               publishedAt: task.metaTable.semantic.publishedAt,
+              dataDomain: task.metaTable.semantic.dataDomain,
               permissionColumnId: task.metaTable.semantic.permissionColumnId,
+              permissionRelation: task.metaTable.semantic.permissionRelation,
             }
           : null,
         columns: allColumns.filter((column) => selectedSet.has(column.id))
           .length,
       },
     };
+  }
+  async resolveForTable(tableId: string, requestedTaskId?: string) {
+    await this.table(tableId);
+    const explicitId = text(requestedTaskId);
+    if (explicitId) {
+      const task = await prisma.governanceTask.findFirst({
+        where: { id: explicitId, metaTableId: tableId },
+        select: { id: true },
+      });
+      if (!task)
+        throw new NotFoundException("Governance task does not belong to this table");
+      return this.get(task.id);
+    }
+    const formal = await prisma.tableSemantic.findUnique({
+      where: { metaTableId: tableId },
+      select: { sourceGovernanceTaskId: true },
+    });
+    if (formal) return this.get(formal.sourceGovernanceTaskId);
+    const latest = await prisma.governanceTask.findFirst({
+      where: { metaTableId: tableId },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true },
+    });
+    return latest ? this.get(latest.id) : null;
   }
   async validateFormula(input: FormulaValidationInput) {
     const tableId = text(input.tableId);
@@ -205,7 +273,7 @@ export class GovernanceWorkspaceService {
         )
       : this.defaultDraft(task.metaTable, allColumns, selectedColumns);
     const resolvedMetrics = this.validatePublish(draft, allColumns);
-    const active = new Set(allColumns.map((column) => column.id));
+    const active = new Set(selectedColumns);
     if (
       draft.table.permissionColumnId &&
       !active.has(draft.table.permissionColumnId)
@@ -237,8 +305,11 @@ export class GovernanceWorkspaceService {
           create: {
             ...column,
             semanticType: column.semanticType as ColumnSemanticType,
-            aggregation: column.aggregation || null,
-            unit: column.unit || null,
+            aggregation: column.semanticType === ColumnSemanticType.METRIC ? column.aggregation || null : null,
+            unit: column.semanticType === ColumnSemanticType.METRIC ? column.unit || null : null,
+            groupable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.groupable,
+            candidateValueQueryable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.candidateValueQueryable,
+            labelDescription: column.semanticType === ColumnSemanticType.LABEL ? column.labelDescription || null : null,
             sourceGovernanceTaskId: id,
             publishedBy: "local-user",
             publishedAt,
@@ -246,8 +317,11 @@ export class GovernanceWorkspaceService {
           update: {
             metricName: column.metricName,
             semanticType: column.semanticType as ColumnSemanticType,
-            aggregation: column.aggregation || null,
-            unit: column.unit || null,
+            aggregation: column.semanticType === ColumnSemanticType.METRIC ? column.aggregation || null : null,
+            unit: column.semanticType === ColumnSemanticType.METRIC ? column.unit || null : null,
+            groupable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.groupable,
+            candidateValueQueryable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.candidateValueQueryable,
+            labelDescription: column.semanticType === ColumnSemanticType.LABEL ? column.labelDescription || null : null,
             sourceGovernanceTaskId: id,
             publishedBy: "local-user",
             publishedAt,
@@ -269,6 +343,7 @@ export class GovernanceWorkspaceService {
             publishedAt,
           })),
         });
+      await this.catalogs.syncForTable(tx, task.metaTableId);
       await this.packages.generateForTable(tx, task.metaTableId);
       await tx.governanceTask.update({
         where: { id },
@@ -288,6 +363,7 @@ export class GovernanceWorkspaceService {
           include: { metaColumn: true },
           orderBy: { metaColumn: { ordinal: "asc" } },
         },
+        metricSuggestions: { orderBy: { createdAt: "asc" } },
       },
     });
     if (!task) throw new NotFoundException("Governance task not found");
@@ -320,21 +396,28 @@ export class GovernanceWorkspaceService {
   ) {
     return {
       table: {
-        businessName: table.name,
+        dataDomain: null,
+        businessName: "",
         description: table.comment ?? "",
         grain: "",
         permissionColumnId: null,
+        permissionRelation: null,
       },
       columns: selected.map((id) => {
         const column = columns.find((item) => item.id === id);
+        const semanticType = classifySemanticType(
+          column ?? { name: "", dataType: "" },
+        );
+        const supportsOptions = semanticType === ColumnSemanticType.DIMENSION || semanticType === ColumnSemanticType.LABEL;
         return {
           metaColumnId: id,
-          metricName: column?.name ?? "",
-          semanticType: classifySemanticType(
-            column ?? { name: "", dataType: "" },
-          ),
+          semanticType,
+          metricName: column?.isPartition ? column.name : column?.comment?.trim() ?? "",
           aggregation: "",
           unit: "",
+          groupable: supportsOptions,
+          candidateValueQueryable: supportsOptions,
+          labelDescription: "",
         };
       }),
       metrics: [],
@@ -417,33 +500,62 @@ export class GovernanceWorkspaceService {
         "Draft columns must match selected columns",
       );
     const rawTable = input.table ?? {};
+    const dataDomain = text(rawTable.dataDomain) || null;
     const permissionColumnId = text(rawTable.permissionColumnId) || null;
-    if (permissionColumnId && !allowed.has(permissionColumnId))
+    const permissionRelation = text(rawTable.permissionRelation) || null;
+    const selectedNames = new Set(
+      allColumns
+        .filter((column) => selectedColumns.includes(column.id))
+        .map((column) => column.name),
+    );
+    const grainFields = text(rawTable.grain)
+      .split(",")
+      .map((name) => name.trim())
+      // Older drafts may contain a business-name grain suggested by AI instead
+      // of a physical column name. It cannot be selected in the current UI, so
+      // discard it while saving the draft rather than blocking AI generation.
+      .filter((name) => selectedNames.has(name));
+    if (permissionColumnId && !selectedColumns.includes(permissionColumnId))
       throw new BadRequestException(
         "Permission column must belong to this active table",
       );
+    if (permissionRelation && !permissionRelations.has(permissionRelation))
+      throw new BadRequestException("Invalid permission relation");
+    if (dataDomain && !dataDomains.has(dataDomain))
+      throw new BadRequestException("Invalid data domain");
     const normalized = {
       selectedColumns,
       table: {
-        businessName: text(rawTable.businessName) || table.name,
+        dataDomain,
+        businessName: text(rawTable.businessName),
         description: text(rawTable.description) || table.comment || "",
-        grain: text(rawTable.grain),
+        grain: [...new Set(grainFields)].join(", "),
         permissionColumnId,
+        permissionRelation,
       },
-      columns: raw.map((column) => ({
-        metaColumnId: text(column.metaColumnId),
-        metricName: text(column.metricName),
-        semanticType: normalizeSemanticType(
+      columns: raw.map((column) => {
+        const semanticType = normalizeSemanticType(
           column.semanticType,
           classifySemanticType(
             allColumns.find(
               (item) => item.id === text(column.metaColumnId),
             ) ?? { name: "", dataType: "" },
           ),
-        ),
-        aggregation: text(column.aggregation),
-        unit: text(column.unit),
-      })),
+        );
+        const supportsOptions = semanticType === ColumnSemanticType.DIMENSION || semanticType === ColumnSemanticType.LABEL;
+        const groupable = supportsOptions ? column.groupable !== false : false;
+        const candidateValueQueryable = supportsOptions ? column.candidateValueQueryable !== false : false;
+        return {
+          metaColumnId: text(column.metaColumnId),
+          metricName: text(column.metricName),
+          semanticType,
+          aggregation: semanticType === ColumnSemanticType.METRIC ? text(column.aggregation) : "",
+          unit: semanticType === ColumnSemanticType.METRIC ? text(column.unit) : "",
+          groupable,
+          candidateValueQueryable,
+          labelDescription: semanticType === ColumnSemanticType.LABEL ? text(column.labelDescription) : "",
+        };
+      }),
       metrics: (Array.isArray(input.metrics) ? input.metrics : []).map((metric) => ({
         id: text(metric.id),
         name: text(metric.name),
@@ -465,10 +577,12 @@ export class GovernanceWorkspaceService {
     if (
       !draft.table.businessName ||
       !draft.table.description ||
-      !draft.table.grain
+      !draft.table.grain ||
+      !draft.table.permissionColumnId ||
+      !draft.table.permissionRelation
     )
       throw new BadRequestException(
-        "Table business name, description, and grain are required before publishing",
+        "Table business name, description, grain, permission column, and permission relation are required before publishing",
       );
     for (const column of draft.columns) {
       if (

@@ -11,7 +11,7 @@ export const Field = ({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div role="group" className={cn("grid gap-1.5", className)} {...props} />
+  <div role="group" className={cn("grid min-w-0 gap-1.5", className)} {...props} />
 );
 export const FieldLabel = React.forwardRef<
   HTMLLabelElement,

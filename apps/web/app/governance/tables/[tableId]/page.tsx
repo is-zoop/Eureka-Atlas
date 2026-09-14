@@ -3,11 +3,19 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Check, ChevronDown, Save, Sparkles, Upload } from "lucide-react";
-import { StatusBadge } from "@/components/common/status-badge";
+import { ArrowLeft, ChevronDown, Plus, Save, Sparkles, Upload } from "lucide-react";
+import { FloatingAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Combobox } from "@/components/ui/combobox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Command,
   CommandEmpty,
@@ -17,6 +25,8 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
+import { Menubar } from "@/components/ui/menubar";
+import { MultiCombobox } from "@/components/ui/multi-combobox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   DataTable,
@@ -25,13 +35,13 @@ import {
 } from "@/components/ui/data-table";
 import {
   Field,
-  FieldDescription,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { CalculatedMetrics, type MetricDraft } from "@/components/governance/calculated-metrics";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { CalculatedMetrics, type AiMetricSuggestion, type MetricDraft } from "@/components/governance/calculated-metrics";
 import { AiGenerationDialog, type AiGeneration } from "@/components/governance/ai-generation-dialog";
 import { api } from "@/lib/api";
 
@@ -51,10 +61,12 @@ type TableInfo = {
   comment?: string | null;
 };
 type TableDraft = {
+  dataDomain: string | null;
   businessName: string;
   description: string;
   grain: string;
   permissionColumnId: string | null;
+  permissionRelation: string | null;
 };
 type ColumnDraft = {
   metaColumnId: string;
@@ -62,6 +74,9 @@ type ColumnDraft = {
   semanticType: "METRIC" | "DIMENSION" | "LABEL" | "PARTITION";
   aggregation: string;
   unit: string;
+  groupable: boolean;
+  candidateValueQueryable: boolean;
+  labelDescription: string;
 };
 type Workspace = {
   id: string;
@@ -71,13 +86,14 @@ type Workspace = {
   selectedColumns: string[];
   draft: { table: TableDraft; columns: ColumnDraft[]; metrics: MetricDraft[] };
   ai: null | {
-    table: Omit<TableDraft, "permissionColumnId">;
+    table: TableDraft;
     columns: Array<
-      ColumnDraft & { columnName: string; confidence: number; reason: string }
+      Omit<ColumnDraft, "labelDescription"> & { labelDescription: string | null; columnName: string; confidence: number; reason: string }
     >;
+    metrics: AiMetricSuggestion[];
   };
   published: {
-    table: { publishedAt: string; permissionColumnId?: string | null } | null;
+    table: { publishedAt: string; dataDomain?: string | null; permissionColumnId?: string | null; permissionRelation?: string | null } | null;
     columns: number;
   };
 };
@@ -88,14 +104,53 @@ const types: ColumnDraft["semanticType"][] = [
   "LABEL",
   "PARTITION",
 ];
+const permissionRelations = ["品牌项目名", "财务店铺名称", "ERP店铺名称", "平台店铺名称"];
+const dataDomains = ["商品企划", "设计研发", "采购管理", "销售管理", "商品运营", "仓库管理", "客服管理", "财务管理", "人资管理", "运维管理"];
 const labels = {
   METRIC: "指标",
   DIMENSION: "维度",
   LABEL: "标签",
   PARTITION: "分区",
 };
-function AiHint({ value, onAdopt }: { value?: string | null; onAdopt?: () => void }) {
-  return value ? <div className="flex min-w-0 items-center gap-1"><p className="min-w-0 truncate text-xs text-sky-700" title={`AI 建议：${value}`}>AI 建议：{value}</p>{onAdopt && <Button variant="outline" size="sm" className="h-6 shrink-0 px-2 text-[11px]" onClick={onAdopt}>采用</Button>}</div> : null;
+const nameLabels = {
+  METRIC: "指标名称",
+  DIMENSION: "维度名称",
+  LABEL: "标签名称",
+  PARTITION: "分区名称",
+};
+const semanticTableMinWidths: Record<ColumnDraft["semanticType"], string> = {
+  METRIC: "min-w-[1152px]",
+  DIMENSION: "min-w-[1168px]",
+  LABEL: "min-w-[1072px]",
+  PARTITION: "min-w-[848px]",
+};
+const supportsGrouping = (type: ColumnDraft["semanticType"]) =>
+  type === "DIMENSION" || type === "LABEL";
+const initialColumnDraft = (column: Field): ColumnDraft => {
+  const semanticType = classify(column);
+  return {
+    metaColumnId: column.id,
+    metricName: semanticType === "PARTITION" ? column.name : column.comment?.trim() ?? "",
+    semanticType,
+    aggregation: "",
+    unit: "",
+    groupable: supportsGrouping(semanticType),
+    candidateValueQueryable: supportsGrouping(semanticType),
+    labelDescription: "",
+  };
+};
+const normalizeColumnDraft = (column: ColumnDraft): ColumnDraft => ({
+  ...column,
+  aggregation: column.semanticType === "METRIC" ? column.aggregation : "",
+  unit: column.semanticType === "METRIC" ? column.unit : "",
+  groupable: supportsGrouping(column.semanticType) ? column.groupable !== false : false,
+  candidateValueQueryable: supportsGrouping(column.semanticType) ? column.candidateValueQueryable !== false : false,
+  labelDescription: column.semanticType === "LABEL" ? column.labelDescription : "",
+});
+function AiHint({ value, onAdopt, emptyText }: { value?: string | boolean | null; onAdopt?: () => void; emptyText?: string }) {
+  if (value === null || value === undefined || value === "") return emptyText ? <p className="text-xs text-slate-400">{emptyText}</p> : null;
+  const text = typeof value === "boolean" ? (value ? "是" : "否") : value;
+  return <div className="grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-1"><p className="min-w-0 break-all text-xs leading-5 text-sky-700" title={`AI 建议：${text}`}>AI 建议：{text}</p>{onAdopt && <Button variant="outline" size="sm" className="mt-0.5 h-6 px-2 text-[11px]" onClick={onAdopt}>采用</Button>}</div>;
 }
 const numericType =
   /^(tinyint|smallint|int|integer|bigint|float|double|real|decimal|numeric)(\b|\()/i;
@@ -126,6 +181,10 @@ function WorkspaceContent() {
   const router = useRouter();
   const search = useSearchParams();
   const initialTask = search.get("task") ?? "";
+  const requestedReturnTo = search.get("returnTo") ?? "";
+  const returnHref = requestedReturnTo.startsWith("/assets/tables")
+    ? requestedReturnTo
+    : "/assets/tables";
   const [taskId, setTaskId] = useState(initialTask);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [allColumns, setAllColumns] = useState<Field[]>([]);
@@ -146,7 +205,10 @@ function WorkspaceContent() {
   const [generationOpen, setGenerationOpen] = useState(false);
   const [activeGeneration, setActiveGeneration] = useState<AiGeneration | null>(null);
   const [showAiSuggestions, setShowAiSuggestions] = useState(true);
+  const [permissionRelationOpen, setPermissionRelationOpen] = useState(false);
   const [editingMetricId, setEditingMetricId] = useState<string | null>(null);
+  const [activeSemanticTab, setActiveSemanticTab] = useState("table");
+  const [metricAddSignal, setMetricAddSignal] = useState(0);
   const [formulaInsertion, setFormulaInsertion] = useState<{
     revision: number;
     field: string;
@@ -159,30 +221,23 @@ function WorkspaceContent() {
     setDraft(result.draft);
   };
   useEffect(() => {
+    if (!tableId) return;
     let cancelled = false;
-    if (initialTask) {
-      void api<Workspace>(`/governance/workspaces/${initialTask}`)
-        .then((result) => {
-          if (!cancelled) apply(result);
-        })
-        .catch((cause: Error) => !cancelled && setError(cause.message));
-      return () => {
-        cancelled = true;
-      };
-    }
-    void Promise.all([
-      api<Detail>(`/metadata/tables/${tableId}`),
-      api<Field[]>(`/metadata/tables/${tableId}/columns`),
-    ])
-      .then(([detail, columns]) => {
+    void api<Workspace | null>(`/governance/workspaces/by-table/${tableId}${initialTask ? `?task=${encodeURIComponent(initialTask)}` : ""}`)
+      .then(async (result) => {
+        if (cancelled) return;
+        if (result) { apply(result); return; }
+        const [detail, columns] = await Promise.all([api<Detail>(`/metadata/tables/${tableId}`), api<Field[]>(`/metadata/tables/${tableId}/columns`)]);
         if (cancelled) return;
         setAllColumns(columns);
         setDraft({
           table: {
-            businessName: detail.name,
+            dataDomain: null,
+            businessName: "",
             description: detail.comment ?? "",
             grain: "",
             permissionColumnId: null,
+            permissionRelation: null,
           },
           columns: [],
           metrics: [],
@@ -240,19 +295,29 @@ function WorkspaceContent() {
         ? { ...current, table: { ...current.table, [key]: next } }
         : current,
     );
-  const updateColumn = (id: string, key: keyof ColumnDraft, next: string) => {
+  const updateColumn = (id: string, key: keyof ColumnDraft, next: string | boolean) => {
     setDraft((current) =>
       current
         ? {
             ...current,
             columns: current.columns.map((column) =>
-              column.metaColumnId === id ? { ...column, [key]: next } : column,
+              column.metaColumnId === id
+                ? normalizeColumnDraft({
+                    ...column,
+                    [key]: next,
+                    ...(key === "semanticType" && supportsGrouping(next as ColumnDraft["semanticType"]) && !supportsGrouping(column.semanticType)
+                      ? { groupable: true, candidateValueQueryable: true }
+                      : {}),
+                  } as ColumnDraft)
+                : column,
             ),
           }
         : current,
     );
   };
   const toggle = (column: Field) => {
+    if (draft?.table.permissionColumnId === column.id)
+      setPermissionRelationOpen(false);
     setSelectedColumns((current) => {
       const selected = current.includes(column.id);
       const next = selected
@@ -262,19 +327,21 @@ function WorkspaceContent() {
         draftValue
           ? {
               ...draftValue,
+              table: selected
+                ? {
+                    ...draftValue.table,
+                    grain: draftValue.table.grain.split(",").map((item) => item.trim()).filter((item) => item && item !== column.name).join(", "),
+                    permissionColumnId: draftValue.table.permissionColumnId === column.id ? null : draftValue.table.permissionColumnId,
+                    permissionRelation: draftValue.table.permissionColumnId === column.id ? null : draftValue.table.permissionRelation,
+                  }
+                : draftValue.table,
               columns: selected
                 ? draftValue.columns.filter(
                     (item) => item.metaColumnId !== column.id,
                   )
                 : [
                     ...draftValue.columns,
-                    {
-                      metaColumnId: column.id,
-                      metricName: column.name,
-                      semanticType: classify(column),
-                      aggregation: "",
-                      unit: "",
-                    },
+                    initialColumnDraft(column),
                   ],
             }
           : draftValue,
@@ -285,7 +352,8 @@ function WorkspaceContent() {
   const toggleAll = () => {
     if (selectedColumns.length === allColumns.length) {
       setSelectedColumns([]);
-      setDraft((current) => (current ? { ...current, columns: [] } : current));
+      setPermissionRelationOpen(false);
+      setDraft((current) => (current ? { ...current, table: { ...current.table, grain: "", permissionColumnId: null, permissionRelation: null }, columns: [] } : current));
       return;
     }
     setSelectedColumns(allColumns.map((column) => column.id));
@@ -295,13 +363,7 @@ function WorkspaceContent() {
             ...current,
             columns: allColumns.map(
               (column) =>
-                columnById.get(column.id) ?? {
-                  metaColumnId: column.id,
-                  metricName: column.name,
-                  semanticType: classify(column),
-                  aggregation: "",
-                  unit: "",
-                },
+                columnById.get(column.id) ?? initialColumnDraft(column),
             ),
           }
         : current,
@@ -323,6 +385,13 @@ function WorkspaceContent() {
       }),
     [allColumns, selectedColumns],
   );
+  const selectedFieldOptions = useMemo(
+    () => selectedColumns.flatMap((id) => {
+      const field = allColumns.find((column) => column.id === id);
+      return field ? [{ value: field.id, label: field.name }] : [];
+    }),
+    [allColumns, selectedColumns],
+  );
   const insertFormulaField = (field: Field) => {
     if (!editingMetricId) return;
     setFormulaInsertion((current) => ({
@@ -339,7 +408,9 @@ function WorkspaceContent() {
         body: JSON.stringify({ tableId, ...payload() }),
       });
       apply(result);
-      router.replace(`/governance/tables/${tableId}?task=${result.id}`, {
+      const nextSearch = new URLSearchParams({ task: result.id });
+      if (requestedReturnTo) nextSearch.set("returnTo", requestedReturnTo);
+      router.replace(`/governance/tables/${tableId}?${nextSearch}`, {
         scroll: false,
       });
       return result;
@@ -359,14 +430,17 @@ function WorkspaceContent() {
       const saved = await saveWorkspace();
       const id = saved?.id ?? taskId;
       if (!id) return;
-      if (action === "save") setNotice("草稿已保存");
+      if (action === "save")
+        setNotice(`草稿已保存，已选 ${selectedColumns.length} 个字段`);
       else {
         const result = await api<Workspace>(
           `/governance/workspaces/${id}/publish`,
           { method: "POST", body: JSON.stringify(payload()) },
         );
         apply(result);
-        setNotice("正式语义和 Semantic Package 已发布");
+        setNotice(
+          `正式语义和 Semantic Package 已发布，已选 ${selectedColumns.length} 个字段`,
+        );
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败");
@@ -374,16 +448,22 @@ function WorkspaceContent() {
       setWorking("");
     }
   };
-  const adoptTable = (key: keyof Omit<TableDraft, "permissionColumnId">) => {
+  const adoptTable = (key: keyof Omit<TableDraft, "permissionColumnId" | "permissionRelation">) => {
     const ai = workspace?.ai?.table;
-    if (ai) updateTable(key, ai[key]);
+    if (ai && ai[key] !== null && ai[key] !== "") updateTable(key, ai[key]);
   };
   const adoptColumn = (
     id: string,
     key: keyof Omit<ColumnDraft, "metaColumnId">,
   ) => {
     const ai = aiById.get(id);
-    if (ai) updateColumn(id, key, ai[key]);
+    if (ai && ai[key] !== null && ai[key] !== "") updateColumn(id, key, ai[key] as string | boolean);
+  };
+  const adoptPermissionSuggestion = () => {
+    const ai = workspace?.ai?.table;
+    if (!ai?.permissionColumnId || !ai.permissionRelation) return;
+    setDraft((current) => current ? { ...current, table: { ...current.table, permissionColumnId: ai.permissionColumnId, permissionRelation: ai.permissionRelation } } : current);
+    setPermissionRelationOpen(false);
   };
   const adoptAllAi = () => {
     const ai = workspace?.ai;
@@ -391,25 +471,34 @@ function WorkspaceContent() {
     const aiColumns = new Map(ai.columns.map((column) => [column.metaColumnId, column]));
     setDraft((current) => current ? {
       ...current,
-      table: { ...current.table, businessName: ai.table.businessName, description: ai.table.description, grain: ai.table.grain },
+      table: {
+        ...current.table,
+        ...(ai.table.dataDomain ? { dataDomain: ai.table.dataDomain } : {}),
+        ...(ai.table.businessName ? { businessName: ai.table.businessName } : {}),
+        ...(ai.table.description ? { description: ai.table.description } : {}),
+        ...(ai.table.grain ? { grain: ai.table.grain } : {}),
+        ...(ai.table.permissionColumnId && ai.table.permissionRelation ? { permissionColumnId: ai.table.permissionColumnId, permissionRelation: ai.table.permissionRelation } : {}),
+      },
       columns: current.columns.map((column) => {
         const suggestion = aiColumns.get(column.metaColumnId);
-        return suggestion ? { ...column, metricName: suggestion.metricName, semanticType: suggestion.semanticType, aggregation: suggestion.aggregation, unit: suggestion.unit } : column;
+        return suggestion
+          ? normalizeColumnDraft({ ...column, metricName: suggestion.metricName || column.metricName, semanticType: suggestion.semanticType, aggregation: suggestion.aggregation || column.aggregation, unit: suggestion.unit || column.unit, groupable: suggestion.groupable, candidateValueQueryable: suggestion.candidateValueQueryable, labelDescription: suggestion.labelDescription ?? column.labelDescription })
+          : column;
       }),
+      metrics: [...current.metrics, ...ai.metrics.filter((suggestion) => !current.metrics.some((metric) => metric.name === suggestion.name)).map((suggestion) => ({ id: `ai-${suggestion.id}`, name: suggestion.name, formula: suggestion.formula, unit: suggestion.unit }))],
     } : current);
   };
+  const adoptMetricSuggestion = (suggestion: AiMetricSuggestion) => setDraft((current) => !current || current.metrics.some((metric) => metric.name === suggestion.name) ? current : { ...current, metrics: [...current.metrics, { id: `ai-${suggestion.id}`, name: suggestion.name, formula: suggestion.formula, unit: suggestion.unit }] });
   if (error && !draft)
     return (
       <main>
-        <p className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {error}
-        </p>
+        <FloatingAlert type="error">{error}</FloatingAlert>
       </main>
     );
   return (
     <main className="flex h-[calc(100vh-104px)] min-h-0 flex-col overflow-hidden">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Button asChild size="sm" variant="outline"><Link href="/assets/tables"><ArrowLeft className="mr-1.5 h-4 w-4" />返回</Link></Button>
+      <Menubar className="mb-4 min-h-0 rounded-none border-0 bg-transparent px-0 py-0 shadow-none">
+        <Button asChild size="sm" variant="outline"><Link href={returnHref}><ArrowLeft className="mr-1.5 h-4 w-4" />返回</Link></Button>
         <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
@@ -438,16 +527,12 @@ function WorkspaceContent() {
               {working === "publish" ? "发布中…" : "发布正式语义"}
             </Button>
         </div>
-      </div>
+      </Menubar>
       {error && (
-        <p className="mb-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {error}
-        </p>
+        <FloatingAlert type="error">{error}</FloatingAlert>
       )}
       {notice && (
-        <p className="mb-4 rounded-lg bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {notice}
-        </p>
+        <FloatingAlert type="success">{notice}</FloatingAlert>
       )}
       <AiGenerationDialog
         key={activeGeneration?.id ?? "new"}
@@ -478,29 +563,8 @@ function WorkspaceContent() {
           setNotice("AI 建议已生成，可逐项采用");
         }}
       />
-      {workspace && (
-        <Card className="mb-5">
-          <CardContent className="flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
-            <span>
-              任务 <b>{workspace.id.slice(-6)}</b>
-            </span>
-            <span>
-              状态 <StatusBadge status={workspace.status} />
-            </span>
-            <span className="text-slate-500">
-              已选 {selectedColumns.length} 个字段
-            </span>
-            {workspace.published.table && (
-              <span className="text-emerald-700">
-                <Check className="mr-1 inline h-4 w-4" />
-                已发布
-              </span>
-            )}
-          </CardContent>
-        </Card>
-      )}
       <div className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(320px,.8fr)_minmax(0,1.7fr)]">
-        <Card className="min-h-0 overflow-hidden">
+        <Card className="min-h-0 overflow-hidden rounded-lg">
           <CardContent className="flex h-full min-h-0 flex-col">
             <div className="mb-4 flex items-center justify-between">
               <div>
@@ -526,7 +590,7 @@ function WorkspaceContent() {
                         key={column.id}
                         value={`${column.name} ${column.dataType} ${column.comment ?? ""}`}
                         onSelect={() => toggle(column)}
-                        className="min-h-9 gap-2 py-1.5"
+                        className="min-h-6 gap-2 py-1.5"
                       >
                         <Checkbox
                           checked={selectedColumns.includes(column.id)}
@@ -534,7 +598,7 @@ function WorkspaceContent() {
                           onClick={(event) => event.stopPropagation()}
                           aria-label={`选择 ${column.name}`}
                         />
-                        <span className="min-w-0 flex-1 truncate font-medium">
+                        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                           {column.name}
                         </span>
                         <span className="shrink-0 text-xs text-slate-500">
@@ -550,8 +614,9 @@ function WorkspaceContent() {
                         )}
                         {editingMetricId && selectedColumns.includes(column.id) && (
                           <Button
-                            size="sm"
+                            size="xs"
                             variant="outline"
+                            className="h-6 px-2 text-[11px]"
                             onClick={(event) => {
                               event.stopPropagation();
                               insertFormulaField(column);
@@ -568,24 +633,31 @@ function WorkspaceContent() {
             </Command>
           </CardContent>
         </Card>
-        <section className="min-h-0 overflow-hidden">
+        <Card className="min-h-0 min-w-0 overflow-hidden rounded-lg">
+          <CardContent className="flex h-full min-h-0 min-w-0 flex-col p-4">
           {draft && (
-            <Tabs defaultValue="table" className="flex h-full min-h-0 flex-col">
+            <Tabs value={activeSemanticTab} onValueChange={setActiveSemanticTab} className="flex h-full min-h-0 min-w-0 flex-col">
               <div className="flex items-center justify-between gap-3">
                 <TabsList>
                   <TabsTrigger value="table">表语义</TabsTrigger>
                   <TabsTrigger value="columns">字段语义（{selectedColumns.length}）</TabsTrigger>
                   <TabsTrigger value="metrics">计算指标（{draft.metrics.length}）</TabsTrigger>
                 </TabsList>
-                {workspace?.ai && <div className="flex shrink-0 gap-2"><Button size="sm" variant="outline" onClick={() => setShowAiSuggestions((current) => !current)}>{showAiSuggestions ? "隐藏 AI 建议" : "显示 AI 建议"}</Button><Button size="sm" onClick={adoptAllAi}>全部采用</Button></div>}
+                <div className="flex shrink-0 gap-2">
+                  {activeSemanticTab === "metrics" && <Button size="sm" variant="outline" className="bg-white text-slate-900 hover:bg-slate-50" onClick={() => setMetricAddSignal((current) => current + 1)}><Plus className="mr-1 h-3.5 w-3.5" />新增指标</Button>}
+                  {workspace?.ai && <><Button size="sm" variant="outline" onClick={() => setShowAiSuggestions((current) => !current)}>{showAiSuggestions ? "隐藏 AI 建议" : "显示 AI 建议"}</Button><Button size="sm" onClick={adoptAllAi}>全部采用</Button></>}
+                </div>
               </div>
               <TabsContent
                 value="table"
-                className="min-h-0 flex-1 overflow-hidden"
+                className="min-h-0 min-w-0 flex-1 overflow-hidden"
               >
-                <Card className="h-full">
-                  <CardContent className="h-full overflow-auto">
-                    <FieldGroup className="grid-cols-1 md:grid-cols-2">
+                <div className="h-full overflow-auto">
+                    <FieldGroup className="grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <Field>
+                        <FieldLabel>数据域</FieldLabel>
+                        <div className="space-y-1"><MultiCombobox className="h-10 w-full min-w-0" multiple={false} value={draft.table.dataDomain ? [draft.table.dataDomain] : []} onValueChange={(value) => updateTable("dataDomain", value[0] ?? null)} placeholder="选择数据域" options={dataDomains.map((value) => ({ value, label: value }))} />{showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.dataDomain} emptyText="AI 未能判断，请人工选择" onAdopt={() => adoptTable("dataDomain")} />}</div>
+                      </Field>
                       <Field>
                         <FieldLabel>业务名称</FieldLabel>
                         <div className="space-y-1">
@@ -595,14 +667,41 @@ function WorkspaceContent() {
                           {showAiSuggestions && <AiHint value={workspace?.ai?.table.businessName} onAdopt={() => adoptTable("businessName")} />}
                         </div>
                       </Field>
-                      <Field>
+                      <Field className="min-w-0">
                         <FieldLabel>粒度</FieldLabel>
-                        <div className="space-y-1">
-                          <div className="flex gap-2">
-                            <Input value={draft.table.grain} onChange={(event) => updateTable("grain", event.target.value)} />
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex min-w-0 gap-2">
+                            <MultiCombobox className="h-10 min-w-0 flex-1" value={draft.table.grain ? draft.table.grain.split(",").map((item) => item.trim()).filter(Boolean).flatMap((name) => selectedFieldOptions.filter((option) => option.label === name).map((option) => option.value)) : []} onValueChange={(value) => updateTable("grain", value.map((id) => selectedFieldOptions.find((option) => option.value === id)?.label).filter(Boolean).join(", "))} placeholder="选择粒度字段" options={selectedFieldOptions} />
                           </div>
-                          {showAiSuggestions && <AiHint value={workspace?.ai?.table.grain} onAdopt={() => adoptTable("grain")} />}
+                          {showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.grain} emptyText="AI 未能识别已选粒度字段，请人工选择" onAdopt={() => adoptTable("grain")} />}
                         </div>
+                      </Field>
+                      <Field className="min-w-0">
+                        <FieldLabel>权限字段</FieldLabel>
+                        <div className="min-w-0 space-y-1"><div className="flex h-10 min-w-0 rounded-md border border-slate-300 bg-white shadow-sm">
+                          <Combobox
+                            className="h-full min-w-0 flex-1"
+                            inputClassName={`h-full border-0 shadow-none ${draft.table.permissionRelation ? "rounded-l-md rounded-r-none" : "rounded-md"}`}
+                            value={draft.table.permissionColumnId ?? ""}
+                            onValueChange={(value) => {
+                              updateTable("permissionColumnId", value || null);
+                              updateTable("permissionRelation", null);
+                              setPermissionRelationOpen(Boolean(value));
+                            }}
+                            placeholder="选择权限字段"
+                            searchPlaceholder="选择权限字段"
+                            options={selectedFieldOptions}
+                          />
+                          {draft.table.permissionRelation && (
+                            <button
+                              type="button"
+                              className="rounded-r-md border-l border-slate-200 bg-slate-50 px-3 text-left text-[13px] text-slate-700 hover:bg-slate-100"
+                              onClick={() => setPermissionRelationOpen(true)}
+                            >
+                              {draft.table.permissionRelation}
+                            </button>
+                          )}
+                        </div>{showAiSuggestions && workspace?.ai && <AiHint value={workspace?.ai?.table.permissionColumnId && workspace?.ai?.table.permissionRelation ? `${selectedFieldOptions.find((option) => option.value === workspace?.ai?.table.permissionColumnId)?.label ?? ""} · ${workspace?.ai?.table.permissionRelation}` : null} emptyText="AI 未能判断，请人工维护" onAdopt={adoptPermissionSuggestion} />}</div>
                       </Field>
                       <Field className="md:col-span-2">
                         <FieldLabel>业务描述</FieldLabel>
@@ -613,54 +712,28 @@ function WorkspaceContent() {
                           {showAiSuggestions && <AiHint value={workspace?.ai?.table.description} onAdopt={() => adoptTable("description")} />}
                         </div>
                       </Field>
-                      <Field>
-                        <FieldLabel>权限字段（可选）</FieldLabel>
-                        <select
-                          value={draft.table.permissionColumnId ?? ""}
-                          onChange={(event) =>
-                            updateTable(
-                              "permissionColumnId",
-                              event.target.value || null,
-                            )
-                          }
-                          className="h-10 rounded-lg border border-slate-200 bg-white px-3"
-                        >
-                          <option value="">不设置</option>
-                          {allColumns.map((column) => (
-                            <option key={column.id} value={column.id}>
-                              {column.name} · {column.dataType}
-                            </option>
-                          ))}
-                        </select>
-                        <FieldDescription>
-                          仅可选择当前表中的有效字段。
-                        </FieldDescription>
-                      </Field>
                     </FieldGroup>
-                  </CardContent>
-                </Card>
+                </div>
               </TabsContent>
               <TabsContent
                 value="columns"
-                className="min-h-0 flex-1 overflow-hidden"
+                className="min-h-0 min-w-0 flex-1 overflow-hidden"
               >
                 {selectedColumns.length === 0 ? (
-                  <Card className="h-full">
-                    <CardContent className="py-16 text-center text-sm text-slate-500">
+                  <div className="flex h-full items-center justify-center text-sm text-slate-500">
                       请从左侧选择字段后在此编辑字段语义。
-                    </CardContent>
-                  </Card>
+                  </div>
                 ) : (
-                  <ScrollArea className="h-full">
+                  <ScrollArea className="h-full min-w-0">
                     <div className="space-y-3 pr-2">
                       {groupedColumns
                         .filter((group) => group.items.length)
                         .map((group) => (
                           <section
                             key={group.type}
-                            className="overflow-hidden rounded-lg border border-slate-200"
+                            className="min-w-0 overflow-hidden rounded-lg border border-slate-200"
                           >
-                            <button
+                            <Button
                               type="button"
                               onClick={() =>
                                 setCollapsedGroups((current) => {
@@ -671,7 +744,8 @@ function WorkspaceContent() {
                                   return next;
                                 })
                               }
-                              className="flex w-full items-center justify-between bg-white px-3 py-2 text-sm font-semibold"
+                              variant="ghost"
+                              className="flex h-auto w-full justify-between rounded-none bg-white px-3 py-2 text-sm font-semibold"
                             >
                               <span>
                                 {labels[group.type]}（{group.items.length}）
@@ -679,18 +753,29 @@ function WorkspaceContent() {
                               <ChevronDown
                                 className={`h-4 w-4 transition-transform ${collapsedGroups.has(group.type) ? "-rotate-90" : ""}`}
                               />
-                            </button>
+                            </Button>
                             {!collapsedGroups.has(group.type) && (
-                              <DataTable className="rounded-none border-x-0 border-b-0">
+                              <DataTable tableClassName={`table-fixed w-full ${semanticTableMinWidths[group.type]}`} className="semantic-fields-table-scroll h-[420px] rounded-none border-x-0 border-b-0">
+                                <colgroup>
+                                  <col className="w-36" />
+                                  <col className="w-36" />
+                                  <col className="w-40" />
+                                  <col className="w-56" />
+                                  <col className="w-44" />
+                                  {group.type === "LABEL" && <col className="w-56" />}
+                                  {supportsGrouping(group.type) && <><col className="w-40" /><col className="w-40" /></>}
+                                  {group.type === "METRIC" && <><col className="w-40" /><col className="w-36" /></>}
+                                </colgroup>
                                 <thead>
                                   <tr>
-                                    <DataTableHead>物理字段</DataTableHead>
-                                    <DataTableHead>类型</DataTableHead>
-                                    <DataTableHead>注释</DataTableHead>
-                                    <DataTableHead>指标名称</DataTableHead>
-                                    <DataTableHead>字段类型</DataTableHead>
-                                    <DataTableHead>聚合方式</DataTableHead>
-                                    <DataTableHead>单位</DataTableHead>
+                                    <DataTableHead className="sticky left-0 z-30 w-36 min-w-36 bg-slate-50">物理字段</DataTableHead>
+                                    <DataTableHead className="sticky left-36 z-30 w-36 min-w-36 bg-slate-50">类型</DataTableHead>
+                                    <DataTableHead className="sticky left-72 z-30 w-40 min-w-40 border-r border-slate-200 bg-slate-50 shadow-[6px_0_8px_-8px_rgba(15,23,42,0.5)]">注释</DataTableHead>
+                                    <DataTableHead>{group.type !== "PARTITION" && <span className="mr-1 text-rose-500">*</span>}{nameLabels[group.type]}</DataTableHead>
+                                    <DataTableHead>{group.type !== "PARTITION" && <span className="mr-1 text-rose-500">*</span>}字段类型</DataTableHead>
+                                    {group.type === "LABEL" && <DataTableHead>标签说明</DataTableHead>}
+                                    {supportsGrouping(group.type) && <><DataTableHead><span className="mr-1 text-rose-500">*</span>是否可以分组</DataTableHead><DataTableHead><span className="mr-1 text-rose-500">*</span>候选值查询</DataTableHead></>}
+                                    {group.type === "METRIC" && <><DataTableHead><span className="mr-1 text-rose-500">*</span>聚合方式</DataTableHead><DataTableHead>单位</DataTableHead></>}
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -699,14 +784,14 @@ function WorkspaceContent() {
                                       const ai = aiById.get(column.id);
                                       return (
                                         <tr key={column.id}>
-                                          <DataTableCell className="font-medium">
+                                          <DataTableCell className="sticky left-0 z-20 w-36 min-w-36 bg-white font-medium">
                                             {column.name}
                                           </DataTableCell>
-                                          <DataTableCell>
+                                          <DataTableCell className="sticky left-36 z-20 w-36 min-w-36 bg-white">
                                             {column.dataType}
                                           </DataTableCell>
                                           <DataTableCell
-                                            className="max-w-40 truncate"
+                                            className="sticky left-72 z-20 w-40 min-w-40 max-w-40 truncate border-r border-slate-200 bg-white shadow-[6px_0_8px_-8px_rgba(15,23,42,0.35)]"
                                             title={column.comment ?? ""}
                                           >
                                             {column.comment || "-"}
@@ -722,38 +807,56 @@ function WorkspaceContent() {
                                           <DataTableCell>
                                             <div className="space-y-1">
                                               <div className="flex gap-1">
-                                                <select value={item.semanticType} onChange={(event) => updateColumn(column.id, "semanticType", event.target.value)} className="h-8 min-w-24 rounded border border-slate-200 bg-white px-2">
-                                                  {types.map((type) => <option key={type} value={type}>{labels[type]}</option>)}
-                                                </select>
+                                                <Combobox className="h-8 min-w-24" value={item.semanticType} onValueChange={(value) => updateColumn(column.id, "semanticType", value)} placeholder="选择字段类型" options={types.map((type) => ({ value: type, label: labels[type] }))} />
                                               </div>
                                               {showAiSuggestions && <AiHint value={ai ? labels[ai.semanticType] : undefined} onAdopt={() => adoptColumn(column.id, "semanticType")} />}
                                             </div>
                                           </DataTableCell>
-                                          <DataTableCell>
-                                            {item.semanticType === "METRIC" ? (
-                                              <div className="space-y-1">
-                                                <div className="flex gap-1">
-                                                  <select className="h-8 min-w-28 rounded border border-slate-200 bg-white px-2" value={item.aggregation} onChange={(event) => updateColumn(column.id, "aggregation", event.target.value)}>
-                                                    <option value="">必填</option>
-                                                    {["SUM", "COUNT", "COUNT_DISTINCT", "AVG", "MIN", "MAX"].map((aggregation) => <option key={aggregation} value={aggregation}>{aggregation}</option>)}
-                                                  </select>
-                                                </div>
-                                                {showAiSuggestions && <AiHint value={ai?.aggregation} onAdopt={() => adoptColumn(column.id, "aggregation")} />}
+                                          {group.type === "LABEL" && (
+                                            <DataTableCell>
+                                              <div className="space-y-1"><Input className="h-8 min-w-36" value={item.labelDescription} onChange={(event) => updateColumn(column.id, "labelDescription", event.target.value)} />{showAiSuggestions && <AiHint value={ai?.labelDescription} onAdopt={() => adoptColumn(column.id, "labelDescription")} />}</div>
+                                            </DataTableCell>
+                                          )}
+                                          {supportsGrouping(group.type) && (
+                                            <DataTableCell>
+                                              <div className="space-y-1"><ToggleGroup
+                                                type="single"
+                                                value={item.groupable ? "yes" : "no"}
+                                                onValueChange={(value) => value && updateColumn(column.id, "groupable", value === "yes")}
+                                              >
+                                                <ToggleGroupItem value="yes">是</ToggleGroupItem>
+                                                <ToggleGroupItem value="no">否</ToggleGroupItem>
+                                              </ToggleGroup>{showAiSuggestions && <AiHint value={ai?.groupable} onAdopt={() => adoptColumn(column.id, "groupable")} />}</div>
+                                            </DataTableCell>
+                                          )}
+                                          {supportsGrouping(group.type) && (
+                                            <DataTableCell>
+                                              <div className="space-y-1"><ToggleGroup
+                                                type="single"
+                                                value={item.candidateValueQueryable ? "yes" : "no"}
+                                                onValueChange={(value) => value && updateColumn(column.id, "candidateValueQueryable", value === "yes")}
+                                              >
+                                                <ToggleGroupItem value="yes">是</ToggleGroupItem>
+                                                <ToggleGroupItem value="no">否</ToggleGroupItem>
+                                              </ToggleGroup>{showAiSuggestions && <AiHint value={ai?.candidateValueQueryable} onAdopt={() => adoptColumn(column.id, "candidateValueQueryable")} />}</div>
+                                            </DataTableCell>
+                                          )}
+                                          {group.type === "METRIC" && <DataTableCell>
+                                            <div className="space-y-1">
+                                              <div className="flex gap-1">
+                                                <Combobox className="h-8 min-w-28" value={item.aggregation} onValueChange={(value) => updateColumn(column.id, "aggregation", value)} placeholder="选择聚合方式" options={["SUM", "COUNT", "COUNT_DISTINCT", "AVG", "MIN", "MAX"].map((aggregation) => ({ value: aggregation, label: aggregation }))} />
                                               </div>
-                                            ) : (
-                                              <span className="text-slate-400">
-                                                -
-                                              </span>
-                                            )}
-                                          </DataTableCell>
-                                          <DataTableCell>
+                                              {showAiSuggestions && <AiHint value={ai?.aggregation} onAdopt={() => adoptColumn(column.id, "aggregation")} />}
+                                            </div>
+                                          </DataTableCell>}
+                                          {group.type === "METRIC" && <DataTableCell>
                                             <div className="space-y-1">
                                               <div className="flex gap-1">
                                                 <Input className="h-8 min-w-24" value={item.unit} onChange={(event) => updateColumn(column.id, "unit", event.target.value)} />
                                               </div>
                                               {showAiSuggestions && <AiHint value={ai?.unit} onAdopt={() => adoptColumn(column.id, "unit")} />}
                                             </div>
-                                          </DataTableCell>
+                                          </DataTableCell>}
                                         </tr>
                                       );
                                     },
@@ -777,6 +880,9 @@ function WorkspaceContent() {
                   metrics={draft.metrics}
                   fields={formulaFields}
                   insertion={formulaInsertion}
+                  addSignal={metricAddSignal}
+                  suggestions={showAiSuggestions ? workspace?.ai?.metrics : []}
+                  onAdoptSuggestion={adoptMetricSuggestion}
                   onChange={(metrics) =>
                     setDraft((current) =>
                       current ? { ...current, metrics } : current,
@@ -790,8 +896,42 @@ function WorkspaceContent() {
               </TabsContent>
             </Tabs>
           )}
-        </section>
+          </CardContent>
+        </Card>
       </div>
+      {draft && (
+        <Dialog
+          open={permissionRelationOpen}
+          onOpenChange={setPermissionRelationOpen}
+        >
+          <DialogContent showCloseButton={false} className="max-w-sm rounded-lg p-5">
+            <DialogHeader>
+              <DialogTitle>选择权限映射关系</DialogTitle>
+              <DialogDescription>
+                勾选一项后将立即保存并关闭窗口。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-1" role="group" aria-label="权限映射关系">
+              {permissionRelations.map((relation) => (
+                <label
+                  key={relation}
+                  className="flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-[13px] text-slate-700 hover:bg-slate-50"
+                >
+                  <Checkbox
+                    checked={draft.table.permissionRelation === relation}
+                    onCheckedChange={(checked) => {
+                      if (!checked) return;
+                      updateTable("permissionRelation", relation);
+                      setPermissionRelationOpen(false);
+                    }}
+                  />
+                  <span>{relation}</span>
+                </label>
+              ))}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </main>
   );
 }

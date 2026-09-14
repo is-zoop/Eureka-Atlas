@@ -6,6 +6,7 @@ process.env.DATA_SOURCE_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
 const { CredentialCryptoService } = require("../dist/datasource/credential-crypto.service");
 const { MaxComputeClient } = require("../dist/metadata/maxcompute.client");
+const { normalizeType } = require("../dist/metadata/datasource-adapter");
 const { MetadataSyncService } = require("../dist/metadata/metadata-sync.service");
 const { prisma } = require("@eureka-atlas/database");
 
@@ -17,6 +18,13 @@ test("encrypts credentials and detects modified ciphertext", () => {
   const modified = Buffer.from(ciphertext, "base64");
   modified[modified.length - 1] ^= 1;
   assert.throws(() => crypto.decrypt(modified.toString("base64")));
+});
+
+test("normalizes common relational database types", () => {
+  assert.equal(normalizeType("varchar(255)"), "STRING");
+  assert.equal(normalizeType("NUMBER(18,2)"), "DECIMAL");
+  assert.equal(normalizeType("timestamp with time zone"), "DATETIME");
+  assert.equal(normalizeType("bytea"), "BINARY");
 });
 
 test("parses table columns and partition keys without reading data", async () => {
@@ -58,34 +66,51 @@ test("signs the complete MaxCompute /api resource path", async () => {
   }
 });
 
-test("paginates active tables and applies keyword, project, and type filters", async () => {
-  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject };
+test("paginates active tables and applies keyword, data space, and type filters", async () => {
+  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
   const calls = [];
   prisma.metaTable = {
     count: async ({ where }) => { calls.push({ kind: "count", where }); return 25; },
     findMany: async (query) => {
       if (query.select?.type) return [{ type: "MANAGED_TABLE" }, { type: "VIEW" }];
       calls.push({ kind: "items", query });
-      return [{ id: "table-25", name: "shop_sales", type: "MANAGED_TABLE", comment: "daily sales", sourceUpdatedAt: null, updatedAt: new Date("2026-09-02"), metaProject: { name: "paiwo_smart" }, _count: { columns: 8 } }];
+      return [{ id: "table-25", name: "shop_sales", type: "MANAGED_TABLE", comment: "daily sales", sourceUpdatedAt: null, updatedAt: new Date("2026-09-02"), metaProject: { name: "paiwo_smart", dataSourceId: "source-1" }, governanceTasks: [], _count: { columns: 8 } }];
     },
   };
   prisma.metaProject = { findMany: async () => [{ name: "paiwo_smart" }, { name: "other_project" }] };
+  prisma.dataSource = { findMany: async () => [{ id: "source-1", name: "MaxCompute" }] };
   try {
     const service = new MetadataSyncService({});
-    const result = await service.listTables({ q: "sales", project: "paiwo_smart", type: "MANAGED_TABLE", page: "99", pageSize: "999" });
+    const result = await service.listTables({ q: "sales", space: "paiwo_smart", type: "MANAGED_TABLE", page: "99", pageSize: "999" });
     assert.equal(result.pageSize, 100); assert.equal(result.page, 1); assert.equal(result.totalPages, 1);
-    assert.deepEqual(result.filters, { projects: ["paiwo_smart", "other_project"], types: ["MANAGED_TABLE", "VIEW"] });
+    assert.deepEqual(result.filters, { spaces: ["paiwo_smart", "other_project"], sources: [{ id: "source-1", name: "MaxCompute" }], types: ["MANAGED_TABLE", "VIEW"] });
     assert.equal(calls[0].where.metaProject.name, "paiwo_smart"); assert.equal(calls[0].where.type, "MANAGED_TABLE"); assert.equal(calls[0].where.OR[0].name.contains, "sales");
     assert.equal(calls.find((call) => call.kind === "items").query.skip, 0);
+    assert.equal(result.items[0].governanceStatus, "UNGOVERNED");
   } finally { Object.assign(prisma, originals); }
 });
 
 test("returns an empty first page for a query with no matching tables", async () => {
-  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject };
+  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
   prisma.metaTable = { count: async () => 0, findMany: async (query) => query.select?.type ? [] : [] };
   prisma.metaProject = { findMany: async () => [] };
+  prisma.dataSource = { findMany: async () => [] };
   try {
     const result = await new MetadataSyncService({}).listTables({ page: "-2", pageSize: "0" });
     assert.equal(result.page, 1); assert.equal(result.pageSize, 20); assert.equal(result.totalPages, 1); assert.deepEqual(result.items, []);
+  } finally { Object.assign(prisma, originals); }
+});
+
+test("marks an unpublished table with an active governance task as a draft", async () => {
+  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
+  prisma.metaTable = {
+    count: async () => 1,
+    findMany: async (query) => query.select?.type ? [{ type: "MANAGED_TABLE" }] : [{ id: "table-draft", name: "shop_sales", type: "MANAGED_TABLE", comment: null, sourceUpdatedAt: null, updatedAt: new Date("2026-09-02"), metaProject: { name: "paiwo_smart", dataSourceId: "source-1" }, semantic: null, semanticPackage: null, governanceTasks: [{ id: "task-draft" }], _count: { columns: 2 } }],
+  };
+  prisma.metaProject = { findMany: async () => [{ name: "paiwo_smart" }] };
+  prisma.dataSource = { findMany: async () => [{ id: "source-1", name: "MaxCompute" }] };
+  try {
+    const result = await new MetadataSyncService({}).listTables({ governanceStatus: "DRAFT" });
+    assert.equal(result.items[0].governanceStatus, "DRAFT");
   } finally { Object.assign(prisma, originals); }
 });

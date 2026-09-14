@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, FileText, LoaderCircle, XCircle } from "lucide-react";
+import { FloatingAlert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
@@ -113,8 +114,8 @@ export function AiGenerationDialog({ open, taskId, generation: initialGeneration
         const stopped = (generation.status === "FAILED" || generation.status === "CANCELLED") && index === current;
         return <li key={step.id} className="flex items-center gap-3 rounded-lg border border-slate-100 px-3 py-2 text-sm"><span className={`flex h-5 w-5 items-center justify-center rounded-full ${done ? "bg-emerald-100 text-emerald-700" : running ? "bg-sky-100 text-sky-700" : stopped ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-400"}`}>{done ? <Check className="h-3.5 w-3.5" /> : running ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : stopped ? <XCircle className="h-3.5 w-3.5" /> : index + 1}</span><span className={running ? "font-medium text-slate-950" : "text-slate-600"}>{step.label}</span></li>;
       })}</ol>}
-      {error && <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
-      {generation?.status === "FAILED" && generation.error && <p className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-700">{generation.error}</p>}
+      {error && <FloatingAlert type="error">{error}</FloatingAlert>}
+      {generation?.status === "FAILED" && generation.error && <FloatingAlert type="error">{generation.error}</FloatingAlert>}
       <DialogFooter>
         {!generation ? <><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={starting || !selectedCount} onClick={() => void start()}>{starting ? "准备中…" : "开始生成"}</Button></> : generation.status === "RUNNING" ? <Button variant="outline" onClick={() => void cancel()}>取消</Button> : generation.status === "FAILED" ? <><Button variant="outline" onClick={close}>关闭</Button><Button onClick={() => setGeneration(null)}>重新开始</Button></> : <Button onClick={close}>完成</Button>}
       </DialogFooter>
