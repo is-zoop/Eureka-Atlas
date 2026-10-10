@@ -1,0 +1,104 @@
+/* Let composition grow with the viewport; keep typography and controls restrained. */
+.page { display: grid; min-height: 100dvh; background: white; }
+.brandPanel {
+  display: none;
+  min-width: 0;
+  min-height: 100dvh;
+  flex-direction: column;
+  overflow: hidden;
+  padding: clamp(32px, 3.5vw, 96px);
+  background: #fffdf8;
+  color: #0f172a;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: clamp(20px, 1.3vw, 24px);
+  font-weight: 600;
+  letter-spacing: -.025em;
+}
+.brand svg { width: clamp(28px, 1.8vw, 32px); height: clamp(28px, 1.8vw, 32px); }
+.artwork {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  max-width: clamp(480px, 34vw, 880px);
+  min-height: 240px;
+  max-height: min(52dvh, 900px);
+  margin: clamp(20px, 2.5dvh, 40px) auto;
+  overflow: hidden;
+}
+.copy { max-width: 600px; padding-bottom: 8px; }
+.eyebrow {
+  margin-bottom: 16px;
+  font-size: clamp(11px, .8vw, 13px);
+  font-weight: 500;
+  letter-spacing: .22em;
+  color: #94a3b8;
+}
+.copy h2 {
+  font-size: clamp(28px, 2.1vw, 40px);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -.025em;
+}
+.description {
+  margin-top: 16px;
+  font-size: clamp(14px, 1vw, 16px);
+  line-height: 1.9;
+  color: #64748b;
+}
+.formPanel {
+  display: flex;
+  min-width: 0;
+  min-height: 100dvh;
+  flex-direction: column;
+  padding: clamp(24px, 3dvh, 48px) clamp(32px, 4vw, 112px);
+}
+.mobileBrand { font-size: 14px; gap: 8px; }
+.mobileBrand svg { width: 20px; height: 20px; }
+.formContainer {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding-block: clamp(24px, 4dvh, 64px);
+}
+.footer { text-align: center; font-size: clamp(11px, .8vw, 13px); letter-spacing: .025em; color: #94a3b8; }
+.form { width: 100%; max-width: clamp(384px, 25vw, 560px); }
+.formHeader { margin-bottom: clamp(32px, 3dvh, 44px); }
+.formHeader .eyebrow { margin-bottom: 12px; font-weight: 600; letter-spacing: .18em; }
+.formHeader h1 { font-size: clamp(30px, 2vw, 38px); line-height: 1.2; }
+.formHeader .description { margin-top: 12px; line-height: 1.7; }
+.form form { display: flex; flex-direction: column; gap: clamp(20px, 2dvh, 28px); }
+.fieldGroup { display: flex; flex-direction: column; gap: 8px; }
+.form label { font-size: clamp(12px, .9vw, 14px); }
+.form .field { height: clamp(52px, 3.6vw, 60px); gap: 12px; border-radius: 12px; padding-inline: 16px; }
+.form input { min-width: 0; font-size: clamp(14px, 1vw, 16px); }
+.form svg { width: clamp(16px, 1.1vw, 18px); height: clamp(16px, 1.1vw, 18px); flex-shrink: 0; }
+.form button[aria-pressed] { width: 36px; height: 36px; }
+.form button[type="submit"] { height: clamp(48px, 3.4vw, 56px); margin-top: 8px; gap: 8px; font-size: clamp(14px, 1vw, 16px); }
+.form [role="alert"] { padding: 12px 16px; }
+.form [data-slot="alert-description"] { font-size: 14px; }
+@media (min-width: 768px) {
+  .page { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .brandPanel { display: flex; }
+  .mobileBrand { visibility: hidden; }
+}
+@media (min-width: 768px) and (max-width: 1023px) {
+  .brandPanel { padding: 32px; }
+  .formPanel { padding-inline: 32px; }
+  .copy h2 { font-size: 28px; }
+}
+@media (max-width: 767px) {
+  .formPanel { padding: 24px 28px; }
+  .form { max-width: 420px; }
+  .formHeader h1 { font-size: 32px; }
+}
+@media (max-height: 700px) {
+  .brandPanel { padding-block: 24px; }
+  .artwork { min-height: 180px; margin-block: 16px; }
+  .formContainer { padding-block: 24px; }
+  .formPanel { padding-block: 24px; }
+}

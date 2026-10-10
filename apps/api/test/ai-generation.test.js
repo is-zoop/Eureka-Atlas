@@ -48,6 +48,16 @@ test("accepts AI JSON wrapped in a Markdown code fence", () => {
   const parsed = service.parse(`模型结果：\n\n\`\`\`JSON\n${JSON.stringify(result)}\n\`\`\``, ["pay_amt"], new Map(), false);
   assert.equal(parsed.columns[0].metric_name, "支付金额");
 });
+
+test("AI partition suggestions default grouping on, allow disabling, and forbid candidate queries", () => {
+  const service = new GovernanceAiService({});
+  for (const [groupable, expected] of [[undefined, true], [true, true], [false, false]]) {
+    const result = { table: { business_name: "销售表", description: "销售数据" }, columns: [{ column_name: "date_pt", metric_name: "日期", semantic_type: "PARTITION", groupable, candidate_value_queryable: true }] };
+    const parsed = service.parse(JSON.stringify(result), ["date_pt"], new Map(), false);
+    assert.equal(parsed.columns[0].groupable, expected);
+    assert.equal(parsed.columns[0].candidate_value_queryable, false);
+  }
+});
 test("uses a configured system prompt and keeps Markdown reference in user context", async () => {
   const service = new GovernanceAiService({}, {}, {}, { aiPrompt: async () => ({ prompt: "固定约束：只输出符合 JSON Schema；禁止完整 SQL" }) });
   const prompt = await service.prompt({ table: { name: "sales" }, columns: [] }, "# 销售口径\n请使用自然语言");
@@ -55,4 +65,5 @@ test("uses a configured system prompt and keeps Markdown reference in user conte
   assert.match(prompt.system, /禁止完整 SQL/);
   assert.match(prompt.user, /supplementary_business_reference/);
   assert.match(prompt.user, /销售口径/);
+  assert.match(prompt.user, /分区groupable缺省为true/);
 });

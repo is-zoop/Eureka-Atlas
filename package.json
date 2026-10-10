@@ -5,6 +5,9 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "pnpm --parallel --filter @eureka-atlas/web --filter @eureka-atlas/api dev",
+    "dev:web": "pnpm --filter @eureka-atlas/web dev",
+    "dev:api": "pnpm --filter @eureka-atlas/api start",
+    "build:api": "pnpm --filter @eureka-atlas/api build",
     "build": "pnpm db:generate && pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
     "db:generate": "pnpm --filter @eureka-atlas/database generate",

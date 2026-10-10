@@ -87,3 +87,60 @@ samp {
   border-radius: 9999px;
   background: #cbd5e1;
 }
+
+/* Ask responses: scoped Eureka-style typography shared by both table renderers. */
+.ask-answer { min-width: 0; padding: 0 2px; color: #1e293b; }
+.ask-processing { margin: 0 0 6px; font-size: 12px; line-height: 1.6; color: #64748b; }
+.ask-processing-toggle { display: flex; align-items: center; gap: 6px; padding: 6px 0; border: 0; background: transparent; cursor: pointer; text-align: left; }
+.ask-processing-body { padding: 6px 10px; }
+.ask-processing-step { display: flex; align-items: flex-start; gap: 6px; padding: 3px 0; }
+.ask-markdown { min-width: 0; max-width: 100%; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.ask-markdown p { margin: 0 0 8px; }
+.ask-markdown p:last-child { margin-bottom: 0; }
+.ask-markdown h1, .ask-markdown h2, .ask-markdown h3, .ask-markdown h4, .ask-markdown h5, .ask-markdown h6 { margin: 10px 0 5px; font-weight: 550; line-height: 1.35; letter-spacing: -.01em; }
+.ask-markdown h1 { font-size: 1.16em; }
+.ask-markdown h2 { font-size: 1.08em; }
+.ask-markdown h3, .ask-markdown h4, .ask-markdown h5, .ask-markdown h6 { font-size: .98em; }
+.ask-markdown ul, .ask-markdown ol { padding-left: 22px; margin: 5px 0 8px; list-style-position: outside; }
+.ask-markdown ul > li { list-style-type: disc; }
+.ask-markdown ol > li { list-style-type: decimal; }
+.ask-markdown li { margin: 3px 0; padding-left: 2px; }
+.ask-markdown li > p { margin: 0; }
+.ask-markdown li::marker { color: #3b82f6; font-weight: 600; }
+.ask-markdown strong { font-weight: 600; }
+.ask-markdown em { color: #64748b; }
+.ask-markdown a { color: #2563eb; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #93c5fd; }
+.ask-markdown a:hover { text-decoration-color: #2563eb; }
+.ask-markdown blockquote { margin: 8px 0; border-left: 3px solid #e2e8f0; padding-left: 12px; color: #64748b; }
+.ask-markdown hr { margin: 14px 0; border: 0; border-top: 1px solid #eef0f3; }
+.ask-markdown code { padding: 2px 4px; border-radius: 3px; background: #f1f5f9; font-size: 12px; }
+.ask-markdown pre, .ask-sql { overflow-x: auto; padding: 12px; margin: 8px 0; border-radius: 6px; background: #f8fafc; font-size: 12px; line-height: 1.6; }
+.ask-markdown pre code { padding: 0; background: transparent; }
+.ask-markdown img { max-width: 100%; }
+.ask-table-wrap { position: relative; width: 100%; margin: 8px 0 12px; padding-top: 28px; }
+.ask-table-copy { position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 4px; color: #64748b; z-index: 1; }
+.ask-copy-error { position: absolute; right: 30px; width: max-content; max-width: 260px; font-size: 11px; color: #e11d48; background: white; }
+.ask-table-scroll { max-width: 100%; overflow-x: auto; }
+.ask-data-table { width: 100%; min-width: max-content; border-collapse: collapse; font-size: 13px; line-height: 1.45; }
+.ask-data-table th { height: 40px; padding: 8px 12px; font-weight: 500; color: #64748b; background: #f8f8f9; white-space: nowrap; text-align: left; border-bottom: 1px solid #e2e2e4; }
+.ask-data-table td { padding: 10px 12px; border-bottom: 1px solid #eef0f3; white-space: nowrap; }
+.ask-data-table tbody tr:last-child td { border-bottom: 0; }
+.ask-data-table tbody tr:hover { background: #fafbfc; }
+.ask-data-table th[align="center"], .ask-data-table td[align="center"] { text-align: center; }
+.ask-data-table th[align="right"], .ask-data-table td[align="right"] { text-align: right; }
+.ask-query-result { margin-top: 16px; }
+.ask-query-result .ask-table-copy { position: relative; top: auto; right: auto; }
+.ask-query-result .ask-table-wrap { padding-top: 0; }
+.ask-query-notes { color: #64748b; font-size: 12px; line-height: 1.6; }
+.ask-query-notes summary { cursor: pointer; }
+.ask-sql { white-space: pre-wrap; overflow-wrap: anywhere; color: #334155; }
+
+/* Keep browser autofill transparent within the login field wrapper. */
+.login-input:is(:autofill, :-webkit-autofill) {
+  background-color: transparent !important;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: #0f172a;
+  caret-color: #0f172a;
+  box-shadow: none !important;
+}

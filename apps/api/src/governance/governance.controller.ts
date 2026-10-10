@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Put, Query, Req } from "@nestjs/common";
+import type { AuthRequest } from "../auth/auth.types";
+import { requestMemberNo } from "../auth/member-no";
 import { GovernanceService } from "./governance.service";
 import { CreateWorkspaceInput, FormulaValidationInput, GovernanceWorkspaceService, WorkspaceInput } from "./governance-workspace.service";
 import { GenerationInput, GovernanceGenerationService } from "./governance-generation.service";
@@ -43,5 +45,7 @@ export class GovernanceWorkspaceController {
   cancelGeneration(@Param("id") id: string, @Param("generationId") generationId: string) { return this.generations.cancel(id, generationId); }
 
   @Post(":id/publish")
-  publish(@Param("id") id: string, @Body() input: WorkspaceInput) { return this.workspaceService.publish(id, input); }
+  publish(@Req() request: AuthRequest, @Param("id") id: string, @Body() input: WorkspaceInput) {
+    return this.workspaceService.publish(id, { member_no: requestMemberNo(request), name: request.authUser!.name }, input);
+  }
 }

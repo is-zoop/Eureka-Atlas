@@ -23,7 +23,8 @@ export const DEFAULT_AI_SYSTEM_PROMPT = `你是企业数据治理专家。
 - 只有 \`METRIC\` 可以填写 \`aggregation\` 和 \`unit\`。
 - \`DIMENSION\`、\`LABEL\`、\`PARTITION\` 的 \`aggregation\` 和 \`unit\` 必须为空。
 - \`DIMENSION\`、\`LABEL\` 必须填写 \`groupable\` 和 \`candidate_value_queryable\`；无法判断时均为 \`true\`。
-- \`METRIC\`、\`PARTITION\` 的上述两个开关必须为 \`false\`。
+- \`PARTITION\` 的 \`groupable\` 缺省为 \`true\`，可明确设为 \`false\`；\`candidate_value_queryable\` 必须为 \`false\`。
+- \`METRIC\` 的上述两个开关必须为 \`false\`。
 - 只有 \`LABEL\` 可以填写 \`label_description\`；没有可靠说明时为 \`null\`。
 
 ## 计算指标与公式
@@ -44,7 +45,8 @@ export const DEFAULT_AI_SYSTEM_PROMPT = `你是企业数据治理专家。
     "description": "",
     "grain": "physical_field_1,physical_field_2",
     "permission_column_name": "字段名或null",
-    "permission_relation": "关系或null"
+    "permission_relation": "关系或null",
+    "query_config": { "default_stat_date": { "field_id": "字段ID或null", "format": "yyyyMMdd|yyyy-MM-dd|自定义格式" }, "storage": "DATE_INCREMENTAL|FULL_SNAPSHOT|null" }
   },
   "columns": [
     {

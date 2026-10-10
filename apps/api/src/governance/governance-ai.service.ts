@@ -4,10 +4,11 @@ import { LlmService } from "../llm/llm.service";
 import { MetricFormulaService } from "./metric-formula.service";
 import { SemanticReferenceService } from "./semantic-reference.service";
 import { DEFAULT_GOVERNANCE_OPTIONS, SystemSettingsService } from "../system-settings/system-settings.service";
+import { defaultQueryConfig, normalizeQueryConfig } from "../semantic/query-config";
 
 type ParsedMetric = { name: string; formula: string; unit?: string; confidence?: number; reason?: string };
 type Parsed = {
-  table: { data_domain: string | null; business_name: string; description: string; grain: string; permission_column_name: string | null; permission_relation: string | null };
+  table: { data_domain: string | null; business_name: string; description: string; grain: string; permission_column_name: string | null; permission_relation: string | null; query_config?: unknown };
   columns: Array<{ column_name: string; metric_name: string; semantic_type: ColumnSemanticType; aggregation: string; unit: string; groupable: boolean; candidate_value_queryable: boolean; label_description: string | null; confidence: number; reason: string }>;
   metrics?: ParsedMetric[];
 };
@@ -56,6 +57,7 @@ export class GovernanceAiService {
     await hooks.ensureActive?.();
     await hooks.onStep?.("VALIDATING_RESULT", "正在校验 AI 返回的建议");
     const parsed = this.parse(raw, task.columns.map((column) => column.name), new Map(context.fieldReferences.map((item) => [item.current_column, item.preferred_name])), Boolean(hooks.referenceMarkdown?.trim()), options);
+    const queryConfig = normalizeQueryConfig(parsed.table.query_config, task.columns, task.allColumns.some((column) => column.isPartition));
     const columnSuggestions = parsed.columns.map((item) => {
       const column = task.columns.find((candidate) => candidate.name === item.column_name);
       if (!column) throw new BadRequestException("LLM response does not match selected columns");
@@ -69,7 +71,7 @@ export class GovernanceAiService {
     await hooks.onStep?.("SAVING_SUGGESTIONS", "正在保存 AI 建议");
     await prisma.$transaction(async (tx) => {
       const permissionColumnId = parsed.table.permission_column_name ? task.columns.find((column) => column.name === parsed.table.permission_column_name)?.id ?? null : null;
-      await tx.aiTableSuggestion.upsert({ where: { governanceTaskId: id }, create: { governanceTaskId: id, dataDomain: parsed.table.data_domain, businessName: parsed.table.business_name, description: parsed.table.description, grain: parsed.table.grain || null, permissionColumnId, permissionRelation: parsed.table.permission_relation }, update: { dataDomain: parsed.table.data_domain, businessName: parsed.table.business_name, description: parsed.table.description, grain: parsed.table.grain || null, permissionColumnId, permissionRelation: parsed.table.permission_relation } });
+      await tx.aiTableSuggestion.upsert({ where: { governanceTaskId: id }, create: { governanceTaskId: id, dataDomain: parsed.table.data_domain, businessName: parsed.table.business_name, description: parsed.table.description, grain: parsed.table.grain || null, permissionColumnId, permissionRelation: parsed.table.permission_relation, queryConfig }, update: { dataDomain: parsed.table.data_domain, businessName: parsed.table.business_name, description: parsed.table.description, grain: parsed.table.grain || null, permissionColumnId, permissionRelation: parsed.table.permission_relation, queryConfig } });
       await tx.aiColumnSuggestion.deleteMany({ where: { governanceTaskId: id } });
       await tx.aiMetricSuggestion.deleteMany({ where: { governanceTaskId: id } });
       await tx.aiColumnSuggestion.createMany({ data: columnSuggestions });
@@ -101,12 +103,12 @@ export class GovernanceAiService {
   }
   private async context(task: Awaited<ReturnType<GovernanceAiService["task"]>>) {
     const historical = await this.references.build(task.columns);
-    return { table: { project: task.metaTable.metaProject.name, name: task.metaTable.name, comment: task.metaTable.comment, type: task.metaTable.type }, columns: task.columns.map((column) => ({ name: column.name, type: column.dataType, comment: column.comment, is_partition: column.isPartition })), ...historical };
+    return { table: { project: task.metaTable.metaProject.name, name: task.metaTable.name, comment: task.metaTable.comment, type: task.metaTable.type }, columns: task.columns.map((column) => ({ id: column.id, name: column.name, type: column.dataType, normalized_type: column.normalizedType, comment: column.comment, is_partition: column.isPartition })), ...historical };
   }
   private async prompt(context: Awaited<ReturnType<GovernanceAiService["context"]>>, referenceMarkdown?: string, options: Awaited<ReturnType<SystemSettingsService["governanceOptions"]>> = DEFAULT_GOVERNANCE_OPTIONS) {
     const { prompt: system } = await this.settings.aiPrompt();
     const markdown = referenceMarkdown?.trim();
-    return { system, user: JSON.stringify({ current_table_context: context, data_domain_options: options.dataDomains, permission_relation_options: options.permissionRelations, supplementary_business_reference: markdown, calculated_metric_policy: markdown ? "仅建议有 Markdown 明确依据的计算指标，不设数量上限" : "计算指标可省略，最多 5 条", required_response_contract: { table: "data_domain 必须从 data_domain_options 选择或为null；permission_relation 必须从 permission_relation_options 选择或为null；business_name、description、grain、permission_column_name（已选字段或null）与权限关系需成对。grain 必须仅使用当前已选字段的物理字段名，并使用英文逗号 , 分隔。", columns: "每个当前字段一项：column_name、metric_name、semantic_type、aggregation、unit、groupable、candidate_value_queryable、label_description、confidence、reason；维度和标签的两个开关缺省为true，其他类型为false", metrics: "name、formula、unit、confidence、reason" } }) };
+    return { system, user: JSON.stringify({ current_table_context: context, data_domain_options: options.dataDomains, permission_relation_options: options.permissionRelations, supplementary_business_reference: markdown, calculated_metric_policy: markdown ? "仅建议有 Markdown 明确依据的计算指标，不设数量上限" : "计算指标可省略，最多 5 条", required_response_contract: { table: "data_domain 必须从 data_domain_options 选择或为null；permission_relation 必须从 permission_relation_options 选择或为null；business_name、description、grain、permission_column_name（已选字段或null）与权限关系需成对。grain 必须仅使用当前已选字段的物理字段名，并使用英文逗号 , 分隔；query_config 只包含默认统计日期和存储方式；默认统计日期字段必须使用当前已选字段 ID，存储方式仅在有分区字段时填写 DATE_INCREMENTAL 或 FULL_SNAPSHOT。", columns: "每个当前字段一项：column_name、metric_name、semantic_type、aggregation、unit、groupable、candidate_value_queryable、label_description、confidence、reason；维度和标签的两个开关缺省为true；分区groupable缺省为true、可明确关闭，candidate_value_queryable必须为false；指标的两个开关为false", metrics: "name、formula、unit、confidence、reason" } }) };
   }
   private parse(raw: string, names: string[], preferredNames: Map<string, string>, hasReferenceMarkdown: boolean, options: Awaited<ReturnType<SystemSettingsService["governanceOptions"]>> = DEFAULT_GOVERNANCE_OPTIONS): Parsed {
     const data = parseJsonObject(raw);
@@ -120,7 +122,7 @@ export class GovernanceAiService {
       const supplied = String(item.metric_name ?? "").trim(); const preferred = columnName ? preferredNames.get(columnName) : undefined;
       const isMetric = semanticType === ColumnSemanticType.METRIC;
       const supportsOptions = semanticType === ColumnSemanticType.DIMENSION || semanticType === ColumnSemanticType.LABEL;
-      return { column_name: columnName ?? String(item.column_name ?? "").trim(), semantic_type: semanticType, metric_name: !supplied || (columnName && supplied.toLowerCase() === columnName.toLowerCase() && preferred) ? preferred ?? supplied : supplied, aggregation: isMetric ? String(item.aggregation ?? "").trim() : "", unit: isMetric ? String(item.unit ?? "").trim() : "", groupable: supportsOptions ? booleanValue(item.groupable, true) : false, candidate_value_queryable: supportsOptions ? booleanValue(item.candidate_value_queryable, true) : false, label_description: semanticType === ColumnSemanticType.LABEL ? nullableText(item.label_description) : null, reason: String(item.reason ?? "AI 生成建议").trim() || "AI 生成建议", confidence: normalizedConfidence(item.confidence) };
+      return { column_name: columnName ?? String(item.column_name ?? "").trim(), semantic_type: semanticType, metric_name: !supplied || (columnName && supplied.toLowerCase() === columnName.toLowerCase() && preferred) ? preferred ?? supplied : supplied, aggregation: isMetric ? String(item.aggregation ?? "").trim() : "", unit: isMetric ? String(item.unit ?? "").trim() : "", groupable: (supportsOptions || semanticType === ColumnSemanticType.PARTITION) ? booleanValue(item.groupable, true) : false, candidate_value_queryable: supportsOptions ? booleanValue(item.candidate_value_queryable, true) : false, label_description: semanticType === ColumnSemanticType.LABEL ? nullableText(item.label_description) : null, reason: String(item.reason ?? "AI 生成建议").trim() || "AI 生成建议", confidence: normalizedConfidence(item.confidence) };
     });
     const actual = columns.map((item) => item.column_name); const unexpected = actual.filter((name) => !names.includes(name)); const missing = names.filter((name) => !actual.includes(name));
     if (new Set(actual).size !== names.length || unexpected.length || missing.length) throw new BadRequestException(`LLM response does not match selected columns${missing.length ? `; missing: ${missing.slice(0, 8).join(", ")}` : ""}${unexpected.length ? `; unexpected: ${unexpected.slice(0, 8).join(", ")}` : ""}`);
@@ -138,7 +140,7 @@ export class GovernanceAiService {
     const normalizedMetrics = metrics.map((metric) => ({ name: String(metric.name ?? "").trim(), formula: String(metric.formula ?? "").trim(), unit: String(metric.unit ?? "").trim(), confidence: normalizedConfidence(metric.confidence), reason: String(metric.reason ?? "AI 生成建议").trim() || "AI 生成建议" }));
     if (normalizedMetrics.some((metric) => !metric.name || !metric.formula) || new Set(normalizedMetrics.map((metric) => metric.name)).size !== normalizedMetrics.length) throw new BadRequestException("LLM response has an invalid calculated metric suggestion");
     const grain = normalizeGrain(result.table.grain, selected, columns);
-    return { table: { data_domain: dataDomain, business_name: String(result.table.business_name).trim(), description: String(result.table.description).trim(), grain, permission_column_name: permission?.columnName ?? null, permission_relation: permission?.relation ?? null }, columns, metrics: normalizedMetrics };
+    return { table: { data_domain: dataDomain, business_name: String(result.table.business_name).trim(), description: String(result.table.description).trim(), grain, permission_column_name: permission?.columnName ?? null, permission_relation: permission?.relation ?? null, query_config: rawTable.query_config ?? rawTable.queryConfig ?? defaultQueryConfig() }, columns, metrics: normalizedMetrics };
   }
   private formulaFields(columns: Array<{ id: string; name: string }>) { return columns.map((column) => ({ id: column.id, column: column.name })); }
 }

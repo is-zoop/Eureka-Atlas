@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { Prisma, prisma } from "@eureka-atlas/database";
-import { buildSemanticPackage, SemanticPackageContent } from "./builder/semantic-package.builder";
+import { AssetStatus, Prisma, prisma } from "@eureka-atlas/database";
+import { buildSemanticPackage, type PackageBuildSource } from "./builder/semantic-package.builder";
+
+type Tx = Prisma.TransactionClient;
 
 @Injectable()
 export class PackageService {
@@ -8,23 +10,50 @@ export class PackageService {
     return prisma.$transaction((tx) => this.generateForTable(tx, tableId));
   }
 
-  async generateForTable(tx: Prisma.TransactionClient, tableId: string) {
-    const table = await tx.metaTable.findUnique({ where: { id: tableId }, include: { semantic: { include: { permissionColumn: { select: { name: true } } } }, columns: { where: { semantic: { isNot: null } }, include: { semantic: true }, orderBy: { ordinal: "asc" } }, semanticMetrics: { orderBy: { name: "asc" } } } });
-    if (!table) throw new NotFoundException("Table not found");
-    if (!table.semantic) throw new BadRequestException("Publish table semantic before generating a package");
-    if (!table.columns.length) throw new BadRequestException("Publish at least one column semantic before generating a package");
-    const content = buildSemanticPackage(table);
-    if (!content.fields.length) throw new BadRequestException("Publish at least one column semantic before generating a package");
-    const saved = await tx.semanticPackage.upsert({ where: { metaTableId: tableId }, create: { metaTableId: tableId, content }, update: { content } });
-    return { ...content, updatedAt: saved.updatedAt };
+  async generateForTable(tx: Tx, tableId: string) {
+    const content = await this.getInTransaction(tx, tableId);
+    await tx.semanticPackage.upsert({
+      where: { metaTableId: tableId },
+      create: { metaTableId: tableId, content: content as Prisma.InputJsonValue },
+      update: { content: content as Prisma.InputJsonValue },
+    });
+    return content;
   }
 
   async get(tableId: string) {
-    const table = await prisma.metaTable.findUnique({ where: { id: tableId }, select: { id: true } });
+    return prisma.$transaction((tx) => this.getInTransaction(tx, tableId), {
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    });
+  }
+
+  async getInTransaction(tx: Tx, tableId: string) {
+    const table = await tx.metaTable.findUnique({
+      where: { id: tableId },
+      include: {
+        metaProject: { include: { dataSource: true } },
+        semantic: true,
+        columns: {
+          where: { status: AssetStatus.ACTIVE },
+          orderBy: { ordinal: "asc" },
+          include: {
+            semantic: {
+              include: {
+                metricCatalogBindings: { include: { metricCatalog: true } },
+                dimensionCatalogBinding: { include: { dimensionCatalog: true } },
+              },
+            },
+          },
+        },
+        semanticMetrics: {
+          orderBy: { name: "asc" },
+          include: { catalogBindings: { include: { metricCatalog: true } } },
+        },
+      },
+    });
     if (!table) throw new NotFoundException("Table not found");
-    const semanticPackage = await prisma.semanticPackage.findUnique({ where: { metaTableId: tableId } });
-    if (!semanticPackage) throw new NotFoundException("Semantic package not found for this table");
-    const content = semanticPackage.content as SemanticPackageContent;
-    return { ...content, metrics: Array.isArray(content.metrics) ? content.metrics : [], updatedAt: semanticPackage.updatedAt };
+    if (table.status !== AssetStatus.ACTIVE || table.metaProject.status !== AssetStatus.ACTIVE)
+      throw new NotFoundException("Active table not found");
+    if (!table.semantic) throw new BadRequestException("Publish table semantic before reading a package");
+    return buildSemanticPackage({ table } as unknown as PackageBuildSource);
   }
 }

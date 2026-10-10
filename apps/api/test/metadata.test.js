@@ -27,12 +27,20 @@ test("normalizes common relational database types", () => {
   assert.equal(normalizeType("bytea"), "BINARY");
 });
 
+test("recognizes native MaxCompute STRING without misclassifying complex types", () => {
+  for (const type of ["string", "STRING", " String "]) assert.equal(normalizeType(type), "STRING");
+  assert.equal(normalizeType("array<string>"), "UNKNOWN");
+  assert.equal(normalizeType("map<string,string>"), "UNKNOWN");
+  assert.equal(normalizeType("struct<name:string>"), "UNKNOWN");
+});
+
 test("parses table columns and partition keys without reading data", async () => {
   const client = new MaxComputeClient({ endpoint: "http://example.test/api", defaultProject: "paiwo_smart", accessKey: "ak", secretKey: "sk" });
   client.request = async () => ({ Table: { Name: "orders", Type: "TABLE", Comment: "orders", LastModifiedTime: "1735689600000", Schema: { Columns: { Column: [{ Name: "id", Type: "BIGINT", Comment: "identifier" }] }, PartitionKeys: { Column: { Name: "ds", Type: "STRING", Comment: "date" } } } } });
   const table = await client.getTable("orders");
   assert.deepEqual(table.columns.map((column) => [column.name, column.isPartition]), [["id", false], ["ds", true]]);
   assert.equal(table.comment, "orders");
+  assert.equal(table.columns[1].normalizedType, "STRING");
 });
 
 test("parses MaxCompute schema XML nested inside a table response", async () => {
@@ -61,6 +69,67 @@ test("signs the complete MaxCompute /api resource path", async () => {
     };
     const client = new MaxComputeClient({ endpoint: "https://example.test/api", defaultProject: "paiwo_smart", accessKey: "ak", secretKey: "sk" });
     assert.equal((await client.getProject()).name, "paiwo_smart");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("asset list and detail use the latest semantic publisher name, never metadata updater or local-user", async () => {
+  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
+  const semantics = [
+    { id: "semantic-A", publishedBy: "member-B", publishedByName: "发布人乙" },
+    { id: "semantic-old", publishedBy: "local-user", publishedByName: null },
+    null,
+  ];
+  const rows = semantics.map((semantic, i) => ({
+    id: "table-" + i, name: "table_" + i, type: "MANAGED_TABLE", comment: null,
+    sourceUpdatedAt: new Date("2026-09-01"), updatedAt: new Date("2026-09-02"),
+    metaProject: { name: "project", catalog: "project", schema: "project", dataSourceId: "source" },
+    semantic, semanticPackage: null, governanceTasks: [], _count: { columns: 2 },
+  }));
+  prisma.metaTable = {
+    count: async () => rows.length,
+    findMany: async query => {
+      if (query.select?.type) return [{ type: "MANAGED_TABLE" }];
+      assert.equal(query.include.semantic.select.publishedByName, true);
+      return rows;
+    },
+    findUnique: async query => {
+      assert.equal(query.include.semantic.select.publishedByName, true);
+      return rows.find(row => row.id === query.where.id);
+    },
+  };
+  prisma.metaProject = { findMany: async () => [{ name: "project" }] };
+  prisma.dataSource = { findMany: async () => [{ id: "source", name: "source" }] };
+  try {
+    const service = new MetadataSyncService({});
+    const list = await service.listTables({});
+    assert.deepEqual(list.items.map(item => item.lastUpdatedBy), ["发布人乙", null, null]);
+    for (const [i, name] of ["发布人乙", null, null].entries()) {
+      const detail = await service.getTable("table-" + i);
+      assert.equal(detail.lastUpdatedBy, name);
+      assert.equal(detail.updatedAt.toISOString(), "2026-09-01T00:00:00.000Z");
+    }
+  } finally { Object.assign(prisma, originals); }
+});
+
+test("submits MaxCompute SQL as a signed instance request", async () => {
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async (url, options) => {
+      assert.equal(String(url), "https://example.test/api/projects/dw/instances?curr_project=dw");
+      assert.equal(options.method, "POST");
+      assert.equal(options.headers["Content-Type"], "application/xml");
+      assert.match(options.body, /<Query><!\[CDATA\[SELECT 1;\]\]><\/Query>/);
+      assert.match(options.body, /^<Instance><Job>/);
+      assert.match(options.body, /<Config>.*<\/Config><Query>/);
+      const date = options.headers.Date;
+      const expected = createHmac("sha1", "sk").update(`POST\n\napplication/xml\n${date}\n/projects/dw/instances?curr_project=dw`).digest("base64");
+      assert.equal(options.headers.Authorization, `ODPS ak:${expected}`);
+      return { ok: true, status: 201, headers: { get: (name) => name === "location" ? "/projects/dw/instances/instance-1" : null }, text: async () => "" };
+    };
+    const client = new MaxComputeClient({ endpoint: "https://example.test/api", defaultProject: "dw", accessKey: "ak", secretKey: "sk", region: "cn-hangzhou" });
+    assert.equal(await client.submitSql("SELECT 1;", "dw", "request-1"), "instance-1");
   } finally {
     global.fetch = originalFetch;
   }
@@ -113,4 +182,21 @@ test("marks an unpublished table with an active governance task as a draft", asy
     const result = await new MetadataSyncService({}).listTables({ governanceStatus: "DRAFT" });
     assert.equal(result.items[0].governanceStatus, "DRAFT");
   } finally { Object.assign(prisma, originals); }
+});
+
+test("reads MaxCompute task results with a signed result parameter", async () => {
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async (url, options) => {
+      assert.equal(String(url), "https://example.test/api/projects/dw/instances/instance-1?curr_project=dw&result");
+      const date = options.headers.Date;
+      const expected = createHmac("sha1", "sk").update(`GET\n\n\n${date}\n/projects/dw/instances/instance-1?curr_project=dw&result`).digest("base64");
+      assert.equal(options.headers.Authorization, `ODPS ak:${expected}`);
+      return { ok: true, status: 200, headers: { get: () => null }, text: async () => '<TaskResults><TaskResult><Result format="text">value</Result></TaskResult></TaskResults>' };
+    };
+    const client = new MaxComputeClient({ endpoint: "https://example.test/api", defaultProject: "dw", accessKey: "ak", secretKey: "sk", region: "cn-hangzhou" });
+    assert.equal(await client.getInstanceResult("instance-1", "dw"), "value");
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

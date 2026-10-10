@@ -8,6 +8,8 @@ import {
   ColumnSemanticType,
   prisma,
 } from "@eureka-atlas/database";
+import type { AuthUser } from "@eureka-atlas/types" with { "resolution-mode": "import" };
+import { requireMemberNo } from "../auth/member-no";
 import { PackageService } from "../package/package.service";
 import {
   classifySemanticType,
@@ -16,6 +18,7 @@ import {
 import { MetricFormulaService } from "./metric-formula.service";
 import { SemanticCatalogService } from "../semantic/semantic-catalog.service";
 import { SystemSettingsService } from "../system-settings/system-settings.service";
+import { defaultQueryConfig, normalizeQueryConfig, type QueryConfig } from "../semantic/query-config";
 
 type TableDraft = {
   dataDomain: string | null;
@@ -24,6 +27,7 @@ type TableDraft = {
   grain: string;
   permissionColumnId: string | null;
   permissionRelation: string | null;
+  queryConfig: QueryConfig;
 };
 type ColumnDraft = {
   metaColumnId: string;
@@ -115,6 +119,7 @@ export class GovernanceWorkspaceService {
         comment: column.comment,
         ordinal: column.ordinal,
         isPartition: column.isPartition,
+        normalizedType: column.normalizedType,
       })),
       selectedColumns,
       draft,
@@ -127,6 +132,7 @@ export class GovernanceWorkspaceService {
               grain: task.tableSuggestion.grain ?? "",
               permissionColumnId: task.tableSuggestion.permissionColumnId,
               permissionRelation: task.tableSuggestion.permissionRelation,
+              queryConfig: task.tableSuggestion.queryConfig,
             },
             columns: task.columnSuggestions.map((suggestion) => ({
               metaColumnId: suggestion.metaColumnId,
@@ -239,7 +245,9 @@ export class GovernanceWorkspaceService {
     });
     return this.get(id);
   }
-  async publish(id: string, input?: WorkspaceInput) {
+  async publish(id: string, publisher: Pick<AuthUser, "member_no" | "name">, input?: WorkspaceInput) {
+    const publishedBy = requireMemberNo(publisher?.member_no);
+    const publishedByName = text(publisher.name) || publishedBy;
     if (input) await this.update(id, input);
     const task = await this.task(id);
     const allColumns = await prisma.metaColumn.findMany({
@@ -274,15 +282,20 @@ export class GovernanceWorkspaceService {
           metaTableId: task.metaTableId,
           sourceGovernanceTaskId: id,
           ...draft.table,
-          publishedBy: "local-user",
+          publishedBy,
+          publishedByName,
           publishedAt,
         },
         update: {
           sourceGovernanceTaskId: id,
           ...draft.table,
-          publishedBy: "local-user",
+          publishedBy,
+          publishedByName,
           publishedAt,
         },
+      });
+      await tx.columnSemantic.deleteMany({
+        where: { metaColumn: { metaTableId: task.metaTableId }, metaColumnId: { notIn: selectedColumns } },
       });
       for (const column of draft.columns)
         await tx.columnSemantic.upsert({
@@ -292,11 +305,11 @@ export class GovernanceWorkspaceService {
             semanticType: column.semanticType as ColumnSemanticType,
             aggregation: column.semanticType === ColumnSemanticType.METRIC ? column.aggregation || null : null,
             unit: column.semanticType === ColumnSemanticType.METRIC ? column.unit || null : null,
-            groupable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.groupable,
+            groupable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL || column.semanticType === ColumnSemanticType.PARTITION) && column.groupable,
             candidateValueQueryable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.candidateValueQueryable,
             labelDescription: column.semanticType === ColumnSemanticType.LABEL ? column.labelDescription || null : null,
             sourceGovernanceTaskId: id,
-            publishedBy: "local-user",
+            publishedBy,
             publishedAt,
           },
           update: {
@@ -304,29 +317,39 @@ export class GovernanceWorkspaceService {
             semanticType: column.semanticType as ColumnSemanticType,
             aggregation: column.semanticType === ColumnSemanticType.METRIC ? column.aggregation || null : null,
             unit: column.semanticType === ColumnSemanticType.METRIC ? column.unit || null : null,
-            groupable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.groupable,
+            groupable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL || column.semanticType === ColumnSemanticType.PARTITION) && column.groupable,
             candidateValueQueryable: (column.semanticType === ColumnSemanticType.DIMENSION || column.semanticType === ColumnSemanticType.LABEL) && column.candidateValueQueryable,
             labelDescription: column.semanticType === ColumnSemanticType.LABEL ? column.labelDescription || null : null,
             sourceGovernanceTaskId: id,
-            publishedBy: "local-user",
+            publishedBy,
             publishedAt,
           },
         });
+      const metricNames = resolvedMetrics.map(({ draft: metric }) => metric.name);
       await tx.semanticMetric.deleteMany({
-        where: { metaTableId: task.metaTableId },
+        where: { metaTableId: task.metaTableId, ...(metricNames.length ? { name: { notIn: metricNames } } : {}) },
       });
-      if (resolvedMetrics.length)
-        await tx.semanticMetric.createMany({
-          data: resolvedMetrics.map(({ draft: metric, resolved }) => ({
+      for (const { draft: metric, resolved } of resolvedMetrics)
+        await tx.semanticMetric.upsert({
+          where: { metaTableId_name: { metaTableId: task.metaTableId, name: metric.name } },
+          create: {
             metaTableId: task.metaTableId,
             sourceGovernanceTaskId: id,
             name: metric.name,
             formula: resolved.formula,
             unit: metric.unit || null,
             dependencies: resolved.dependencies,
-            publishedBy: "local-user",
+            publishedBy,
             publishedAt,
-          })),
+          },
+          update: {
+            sourceGovernanceTaskId: id,
+            formula: resolved.formula,
+            unit: metric.unit || null,
+            dependencies: resolved.dependencies,
+            publishedBy,
+            publishedAt,
+          },
         });
       await this.catalogs.syncForTable(tx, task.metaTableId);
       await this.packages.generateForTable(tx, task.metaTableId);
@@ -387,6 +410,7 @@ export class GovernanceWorkspaceService {
         grain: "",
         permissionColumnId: null,
         permissionRelation: null,
+        queryConfig: defaultQueryConfig(),
       },
       columns: selected.map((id) => {
         const column = columns.find((item) => item.id === id);
@@ -400,7 +424,7 @@ export class GovernanceWorkspaceService {
           metricName: column?.isPartition ? column.name : column?.comment?.trim() ?? "",
           aggregation: "",
           unit: "",
-          groupable: supportsOptions,
+          groupable: supportsOptions || semanticType === ColumnSemanticType.PARTITION,
           candidateValueQueryable: supportsOptions,
           labelDescription: "",
         };
@@ -520,6 +544,7 @@ export class GovernanceWorkspaceService {
         grain: [...new Set(grainFields)].join(", "),
         permissionColumnId,
         permissionRelation,
+        queryConfig: normalizeQueryConfig(rawTable.queryConfig, allColumns.filter((column) => selectedColumns.includes(column.id)), allColumns.some((column) => column.isPartition)),
       },
       columns: raw.map((column) => {
         const semanticType = normalizeSemanticType(
@@ -531,7 +556,7 @@ export class GovernanceWorkspaceService {
           ),
         );
         const supportsOptions = semanticType === ColumnSemanticType.DIMENSION || semanticType === ColumnSemanticType.LABEL;
-        const groupable = supportsOptions ? column.groupable !== false : false;
+        const groupable = supportsOptions || semanticType === ColumnSemanticType.PARTITION ? column.groupable !== false : false;
         const candidateValueQueryable = supportsOptions ? column.candidateValueQueryable !== false : false;
         return {
           metaColumnId: text(column.metaColumnId),

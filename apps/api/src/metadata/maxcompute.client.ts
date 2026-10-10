@@ -18,8 +18,11 @@ type Credentials = {
   defaultProject: string;
   accessKey: string;
   secretKey: string;
+  signal?: AbortSignal;
 };
 export type RemoteProject = { name: string; description?: string };
+export type MaxComputeInstanceStatus = "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "UNKNOWN";
+export type MaxComputeInstance = { id: string; status: MaxComputeInstanceStatus; startedAt?: string; completedAt?: string };
 
 const asArray = <T>(value: T | T[] | undefined): T[] =>
   value === undefined ? [] : Array.isArray(value) ? value : [value];
@@ -138,6 +141,53 @@ export class MaxComputeClient {
     };
   }
 
+  async listPartitions(tableName: string, projectName = this.credentials.defaultProject): Promise<string[]> {
+    const document = await this.request(
+      `/projects/${encodeURIComponent(projectName)}/tables/${encodeURIComponent(tableName)}/partitions`,
+      projectName,
+    );
+    const root = document.Partitions ?? document.partitions ?? document;
+    return asArray(root.Partition ?? root.partition)
+      .map((item: Record<string, unknown> | string) => typeof item === "string" ? item : text(item.Name ?? item.name ?? item.Spec ?? item.spec) ?? "")
+      .filter(Boolean);
+  }
+  async submitSql(sql: string, projectName = this.credentials.defaultProject, idempotencyKey?: string): Promise<string> {
+    const taskName = "EurekaAtlasQuery";
+    const guid = idempotencyKey ? `<Guid>${escapeXml(idempotencyKey)}</Guid>` : "";
+    const query = sql.replace(/]]>/g, "]".repeat(4) + "><![CDATA[>");
+    const body = `<Instance><Job><Name>${taskName}</Name>${guid}<Tasks><SQL><Name>${taskName}</Name><Config><Property><Name>settings</Name><Value>{&quot;odps.sql.type.system.odps2&quot;:&quot;true&quot;}</Value></Property></Config><Query><![CDATA[${query}]]></Query></SQL></Tasks></Job></Instance>`;
+    const response = await this.requestResponse("POST", `/projects/${encodeURIComponent(projectName)}/instances`, projectName, body, { "Content-Type": "application/xml" });
+    const location = response.headers.get("location");
+    const id = location?.split("/").filter(Boolean).at(-1);
+    if (!id) throw new BadGatewayException("MaxCompute did not return an instance identifier");
+    return id;
+  }
+
+  async getInstance(instanceId: string, projectName = this.credentials.defaultProject): Promise<MaxComputeInstance> {
+    const response = await this.requestResponse("GET", `/projects/${encodeURIComponent(projectName)}/instances/${encodeURIComponent(instanceId)}`, projectName);
+    const document = this.parser.parse(await response.text());
+    const instance = document.Instance ?? document.instance ?? document;
+    const tasks = (instance.Tasks ?? instance.tasks ?? instance) as Record<string, unknown>;
+    const task = asArray(tasks.Task ?? tasks.task)[0] as Record<string, unknown> | undefined;
+    const value = String(task?.Status ?? task?.status ?? instance.Status ?? instance.status ?? "UNKNOWN").toUpperCase();
+    const status: MaxComputeInstanceStatus = value === "CANCELLED" ? "CANCELLED" : value === "TERMINATED" ? "SUCCEEDED" : value === "RUNNING" || value === "SUSPENDED" ? "RUNNING" : value === "SUCCESS" || value === "SUCCEEDED" ? "SUCCEEDED" : value === "FAILED" ? "FAILED" : "UNKNOWN";
+    return { id: instanceId, status, startedAt: response.headers.get("x-odps-start-time") ?? undefined, completedAt: response.headers.get("x-odps-end-time") ?? undefined };
+  }
+
+  async getInstanceResult(instanceId: string, projectName = this.credentials.defaultProject): Promise<string> {
+    const response = await this.requestResponse("GET", `/projects/${encodeURIComponent(projectName)}/instances/${encodeURIComponent(instanceId)}?result`, projectName);
+    const document = this.parser.parse(await response.text());
+    const root = document.Instance ?? document.instance ?? document;
+    const tasks = (root.Tasks ?? root.TaskResults ?? root.tasks ?? root.taskResults ?? root) as Record<string, unknown>;
+    const task = asArray(tasks.Task ?? tasks.TaskResult ?? tasks.task ?? tasks.taskResult)[0] as Record<string, unknown> | undefined;
+    const result = task?.Result ?? task?.result;
+    return text(result) ?? text((result as Record<string, unknown> | undefined)?.["#text"]) ?? "";
+  }
+
+  async cancelInstance(instanceId: string, projectName = this.credentials.defaultProject): Promise<void> {
+    await this.requestResponse("PUT", `/projects/${encodeURIComponent(projectName)}/instances/${encodeURIComponent(instanceId)}`, projectName, "<Instance><Status>Terminated</Status></Instance>", { "Content-Type": "application/xml" });
+  }
+
   private parseColumns(raw: unknown, isPartition: boolean): RemoteColumn[] {
     return asArray<Record<string, unknown>>(
       raw as Record<string, unknown> | Record<string, unknown>[] | undefined,
@@ -189,6 +239,17 @@ export class MaxComputeClient {
     resource: string,
     currentProject = this.credentials.defaultProject,
   ) {
+    const response = await this.requestResponse("GET", resource, currentProject);
+    return this.parser.parse(await response.text());
+  }
+
+  private async requestResponse(
+    method: "GET" | "POST" | "PUT",
+    resource: string,
+    currentProject = this.credentials.defaultProject,
+    body?: string,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<Response> {
     const date = new Date().toUTCString();
     const requestUrl = new URL(
       `${this.credentials.endpoint.replace(/\/$/, "")}${resource}`,
@@ -208,29 +269,41 @@ export class MaxComputeClient {
       "",
     );
     const resourcePath = requestUrl.pathname.slice(endpointPath.length) || "/";
+    const bareParameters = new Set(
+      (resource.split("?", 2)[1] ?? "").split("&")
+        .filter((part) => part && !part.includes("="))
+        .map((part) => decodeURIComponent(part)),
+    );
     const query = [...requestUrl.searchParams.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(
-        ([key, value]) =>
-          `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-      )
+      .map(([key, value]) => bareParameters.has(key) && value === ""
+        ? encodeURIComponent(key)
+        : `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
       .join("&");
+    requestUrl.search = query ? `?${query}` : "";
     const canonicalResource = `${resourcePath}${query ? `?${query}` : ""}`;
+    const contentType = extraHeaders["Content-Type"] ?? "";
     const signature = createHmac("sha1", this.credentials.secretKey)
-      .update(`GET\n\n\n${date}\n${canonicalResource}`)
+      .update(`${method}\n\n${contentType}\n${date}\n${canonicalResource}`)
       .digest("base64");
     let response: Response | undefined;
     let requestError: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        this.credentials.signal?.throwIfAborted();
         response = await fetch(requestUrl, {
+          ...(this.credentials.signal ? {signal:this.credentials.signal} : {}),
+          method,
+          body,
           headers: {
             Date: date,
             Authorization: `ODPS ${this.credentials.accessKey}:${signature}`,
+            ...extraHeaders,
           },
         });
         break;
       } catch (error) {
+        if(this.credentials.signal?.aborted)throw error;
         requestError = error;
         if (attempt < 3) {
           await new Promise((resolve) => setTimeout(resolve, attempt * 250));
@@ -250,20 +323,20 @@ export class MaxComputeClient {
         `Unable to reach the MaxCompute endpoint${code ? ` (${code})` : ""}`,
       );
     }
-    const body = await response.text();
     if (response.status === 401)
       throw new UnauthorizedException("MaxCompute credentials were rejected");
-    if (response.status === 403)
-      throw new ForbiddenException(
-        "MaxCompute permissions are insufficient for metadata access",
-      );
+    if (response.status === 403) {
+      const detail = this.errorDetail(await response.text());
+      throw new ForbiddenException(`MaxCompute rejected the request${detail ? `: ${detail}` : ""}`);
+    }
     if (!response.ok) {
+      const body = await response.text();
       const detail = this.errorDetail(body);
       throw new BadGatewayException(
         `MaxCompute returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`,
       );
     }
-    return this.parser.parse(body);
+    return response;
   }
 
   private errorDetail(body: string): string | undefined {
@@ -278,3 +351,5 @@ export class MaxComputeClient {
     }
   }
 }
+
+const escapeXml = (value: string) => value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[character] ?? character);

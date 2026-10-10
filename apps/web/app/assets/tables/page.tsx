@@ -13,7 +13,7 @@ import { SemanticPackageDialog } from "@/components/semantic/semantic-package-di
 import { Table, TableCell, TableHead } from "@/components/ui/table";
 import { api } from "@/lib/api";
 
-type AssetTable = { id: string; name: string; type: string; comment?: string; space: string; source: string; columnCount: number; updatedAt: string; governanceStatus: "UNGOVERNED" | "DRAFT" | "COMPLETED"; hasPackage: boolean };
+type AssetTable = { id: string; name: string; type: string; comment?: string; space: string; source: string; columnCount: number; updatedAt: string; lastUpdatedBy: string | null; governanceStatus: "UNGOVERNED" | "DRAFT" | "COMPLETED"; hasPackage: boolean };
 type TableResponse = { items: AssetTable[]; total: number; page: number; pageSize: number; totalPages: number; filters: { spaces: string[]; sources: Array<{id:string;name:string}>; types: string[] } };
 const objectTypeLabels: Record<string, string> = { MANAGED_TABLE: "数据表" };
 
@@ -46,23 +46,25 @@ function TablesPageContent() {
         <Button variant="outline" size="sm" className="h-9 px-3 text-[13px]" disabled={!query && !space && !sourceId && !type && !governanceStatus} onClick={() => { setSearch(""); router.replace(pathname, { scroll: false }); }}><RotateCcw className="h-4 w-4" />重置筛选</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden">
-        <Table freezeLastColumn className="min-w-[1120px]">
+        <Table freezeLastColumn className="min-w-[1280px]">
           <colgroup>
-            <col className="w-[46%]" />
+            <col className="w-[34%]" />
+            <col className="w-[10%]" />
             <col className="w-[8%]" />
-            <col className="w-[8%]" />
-            <col className="w-[12%]" />
-            <col className="w-[8%]" />
+            <col className="w-[6%]" />
+            <col className="w-[14%]" />
             <col className="w-[9%]" />
+            <col className="w-[8%]" />
+            <col className="w-[156px]" />
           </colgroup>
           <thead>
             <tr>
-              <TableHead className="whitespace-nowrap">表名称</TableHead><TableHead className="whitespace-nowrap">数据空间</TableHead><TableHead className="whitespace-nowrap">对象类型</TableHead><TableHead className="whitespace-nowrap">字段数量</TableHead><TableHead className="whitespace-nowrap">更新时间</TableHead><TableHead className="whitespace-nowrap">治理状态</TableHead>
+              <TableHead className="whitespace-nowrap">表名称</TableHead><TableHead className="whitespace-nowrap">数据空间</TableHead><TableHead className="whitespace-nowrap">对象类型</TableHead><TableHead className="whitespace-nowrap">字段数量</TableHead><TableHead className="whitespace-nowrap">更新时间</TableHead><TableHead className="whitespace-nowrap">最近更新人</TableHead><TableHead className="whitespace-nowrap">治理状态</TableHead>
               <TableHead className="sticky right-0 z-30 whitespace-nowrap shadow-[-6px_0_8px_-8px_rgba(15,23,42,0.35)]">操作</TableHead>
             </tr>
           </thead>
           <tbody>
-            {!data ? <tr><TableCell colSpan={7} className="py-12 text-center text-slate-500">正在加载数据资产…</TableCell></tr> : data.items.length === 0 ? <tr><TableCell colSpan={7} className="py-12 text-center text-slate-500"><TableProperties className="mx-auto mb-2 h-6 w-6" />没有符合当前筛选条件的数据表</TableCell></tr> : data.items.map((item) => <tr key={item.id} className="group"><TableCell><Link href={`/assets/tables/${item.id}?returnTo=${encodeURIComponent(`${pathname}${queryString ? `?${queryString}` : ""}`)}`} title={item.name} className="block truncate text-[13px] font-medium text-[#27364b] hover:underline">{item.name}</Link><div title={item.comment || "无注释"} className="mt-1 truncate whitespace-nowrap text-[13px] text-slate-400">{item.comment || "无注释"}</div></TableCell><TableCell><span title={item.space} className="block truncate whitespace-nowrap">{item.space}</span></TableCell><TableCell><span className="block truncate whitespace-nowrap">{objectTypeLabels[item.type] ?? item.type}</span></TableCell><TableCell className="whitespace-nowrap">{item.columnCount}</TableCell><TableCell><span title={new Date(item.updatedAt).toLocaleString()} className="block truncate whitespace-nowrap">{new Date(item.updatedAt).toLocaleString()}</span></TableCell><TableCell className="whitespace-nowrap"><StatusBadge status={item.governanceStatus} /></TableCell><TableCell className="whitespace-nowrap"><div className="flex gap-2">{item.hasPackage && <SemanticPackageDialog tableId={item.id} label="查看 Package" />}<Button asChild size="sm" className="rounded-lg"><Link href={`/governance/tables/${item.id}?returnTo=${encodeURIComponent(`${pathname}${queryString ? `?${queryString}` : ""}`)}`}><Play className="h-3.5 w-3.5" />开始治理</Link></Button></div></TableCell></tr>)}
+            {!data ? <tr><TableCell colSpan={8} className="py-12 text-center text-slate-500">正在加载数据资产…</TableCell></tr> : data.items.length === 0 ? <tr><TableCell colSpan={8} className="py-12 text-center text-slate-500"><TableProperties className="mx-auto mb-2 h-6 w-6" />没有符合当前筛选条件的数据表</TableCell></tr> : data.items.map((item) => <tr key={item.id} className="group"><TableCell><Link href={`/assets/tables/${item.id}?returnTo=${encodeURIComponent(`${pathname}${queryString ? `?${queryString}` : ""}`)}`} title={item.name} className="block truncate text-[13px] font-medium text-[#27364b] hover:underline">{item.name}</Link><div title={item.comment || "无注释"} className="mt-1 truncate whitespace-nowrap text-[13px] text-slate-400">{item.comment || "无注释"}</div></TableCell><TableCell><span title={item.space} className="block truncate whitespace-nowrap">{item.space}</span></TableCell><TableCell><span className="block truncate whitespace-nowrap">{objectTypeLabels[item.type] ?? item.type}</span></TableCell><TableCell className="whitespace-nowrap">{item.columnCount}</TableCell><TableCell><span title={new Date(item.updatedAt).toLocaleString()} className="block truncate whitespace-nowrap">{new Date(item.updatedAt).toLocaleString()}</span></TableCell><TableCell><span title={item.lastUpdatedBy ?? undefined} className="block truncate whitespace-nowrap">{item.lastUpdatedBy || "—"}</span></TableCell><TableCell className="whitespace-nowrap"><StatusBadge status={item.governanceStatus} /></TableCell><TableCell className="whitespace-nowrap"><div className="flex gap-2"><Button asChild size="sm" className="rounded-lg"><Link href={`/governance/tables/${item.id}?returnTo=${encodeURIComponent(`${pathname}${queryString ? `?${queryString}` : ""}`)}`}><Play className="h-3.5 w-3.5" />开始治理</Link></Button>{item.hasPackage && <SemanticPackageDialog tableId={item.id} label="查看 Package" iconOnly />}</div></TableCell></tr>)}
           </tbody>
         </Table>
       </div>

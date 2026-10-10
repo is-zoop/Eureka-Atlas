@@ -24,7 +24,8 @@ export type SourceAdapter = {
 };
 
 export function normalizeType(type: string): StandardDataType {
-  const value = type.toUpperCase();
+  const value = type.trim().toUpperCase();
+  if (value === "STRING") return StandardDataType.STRING;
   if (/BOOL/.test(value)) return StandardDataType.BOOLEAN;
   if (/JSON/.test(value)) return StandardDataType.JSON;
   if (/BLOB|BINARY|BYTEA|RAW|IMAGE/.test(value)) return StandardDataType.BINARY;

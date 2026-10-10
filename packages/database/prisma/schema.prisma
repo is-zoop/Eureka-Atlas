@@ -48,6 +48,32 @@ enum AssetStatus {
   DEPRECATED
 }
 
+enum QueryExecutionStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLING
+  CANCELLED
+  TIMED_OUT
+}
+
+enum AskRunStatus {
+  RUNNING
+  WAITING_CLARIFICATION
+  SUCCEEDED
+  FAILED
+  CANCELLING
+  CANCELLED
+  INTERRUPTED
+}
+
+enum AskMessageRole {
+  USER
+  ASSISTANT
+  TOOL
+}
+
 enum GovernanceTaskStatus {
   PENDING
   PROCESSING
@@ -159,6 +185,17 @@ model DataSourceSyncSpace {
   @@map("data_source_sync_space")
 }
 
+model AuthSession {
+  id             String   @id
+  tokenEncrypted String
+  memberNo       String
+  createdAt      DateTime @default(now())
+  expiresAt      DateTime
+
+  @@index([expiresAt])
+  @@map("auth_session")
+}
+
 model SystemSetting {
   id        String   @id @default(cuid())
   key       String   @unique
@@ -192,16 +229,19 @@ model ModelProvider {
   id                  String            @id @default(cuid())
   name                String            @unique
   kind                ModelProviderKind
-  builtinId           String?           @unique
+  builtinId           String?
   protocol            String
   baseUrl             String?
   apiKeyEncrypted     String?
+  authMode            String            @default("API_KEY")
+  oauthEncrypted      String?
   headers             Json              @default("{}")
   compat              Json              @default("{}")
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   models              ModelConfig[]
 
+  @@unique([builtinId, authMode])
   @@map("model_provider")
 }
 
@@ -266,6 +306,7 @@ model MetaTable {
   semantic        TableSemantic?
   semanticPackage SemanticPackage?
   semanticMetrics SemanticMetric[]
+  queryExecutions QueryExecution[]
 
   @@unique([metaProjectId, name])
   @@map("meta_table")
@@ -347,6 +388,7 @@ model AiTableSuggestion {
   grain        String?
   permissionColumnId String?
   permissionRelation String?
+  queryConfig   Json   @default("{}")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   governanceTask GovernanceTask @relation(fields: [governanceTaskId], references: [id], onDelete: Cascade)
@@ -436,7 +478,9 @@ model TableSemantic {
   grain                  String
   permissionColumnId     String?
   permissionRelation     String?
+  queryConfig            Json           @default("{}")
   publishedBy            String
+  publishedByName        String?
   publishedAt            DateTime       @default(now())
   updatedAt              DateTime       @updatedAt
   metaTable              MetaTable      @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
@@ -548,4 +592,157 @@ model SemanticPackage {
   metaTable   MetaTable @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
 
   @@map("semantic_package")
+}
+
+enum QueryExecutionKind {
+  SEMANTIC_QUERY
+  DATA_QUERY
+}
+
+model QueryResultChunk {
+  queryExecutionId String
+  chunkIndex Int
+  rows Json
+  execution QueryExecution @relation(fields: [queryExecutionId], references: [id], onDelete: Cascade)
+
+  @@id([queryExecutionId, chunkIndex])
+  @@map("query_result_chunk")
+}
+
+model QueryExecution {
+  ownerMemberNo  String?
+  id             String               @id @default(cuid())
+  metaTableId    String
+  dataSourceId   String
+  status         QueryExecutionStatus @default(PENDING)
+  remoteInstanceId String?             @unique
+  idempotencyKey  String?
+  request        Json
+  sql            String
+  contentVersion String
+  snapshotDate   String?
+  resultColumns  Json?
+  result         Json?
+  kind           QueryExecutionKind @default(SEMANTIC_QUERY)
+  resultRowCount Int @default(0)
+  resolvedDates  Json @default("[]")
+  resultChunks   QueryResultChunk[]
+  resultBytes    Int                  @default(0)
+  truncated      Boolean              @default(false)
+  error          String?
+  submittedAt    DateTime             @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  expiresAt      DateTime
+  metaTable      MetaTable            @relation(fields: [metaTableId], references: [id], onDelete: Cascade)
+  askRunLinks    AskRunQuery[]
+
+  @@index([kind, status])
+  @@index([status])
+  @@unique([ownerMemberNo, idempotencyKey])
+  @@index([ownerMemberNo, submittedAt])
+  @@index([metaTableId, submittedAt])
+  @@map("query_execution")
+}
+
+model AskRun {
+  id              String       @id @default(cuid())
+  askSessionId    String?
+  status          AskRunStatus @default(RUNNING)
+  idempotencyKey  String
+  question        String
+  answer          String?
+  modelConfigId   String
+  modelDisplayName String?
+  modelProviderName String?
+  thinkingLevel        String   @default("off")
+  tableIds        Json
+  packageVersions Json         @default("{}")
+  clarification   Json?
+  error           String?
+  clarificationId String?
+  nextEventSequence Int        @default(0)
+  nextMessageSequence Int      @default(0)
+  queryDefinition Json?
+  conditionChanges Json?
+  loopVersion      Int          @default(0)
+  startedAt       DateTime     @default(now())
+  completedAt     DateTime?
+  updatedAt       DateTime     @updatedAt
+  messages        AskRunMessage[]
+  events          AskRunEvent[]
+  queries         AskRunQuery[]
+  session         AskSession?  @relation(fields: [askSessionId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@unique([askSessionId, idempotencyKey])
+  @@index([askSessionId, startedAt])
+  @@map("ask_run")
+}
+
+model AskSession {
+  ownerMemberNo        String?
+  id                   String   @id @default(cuid())
+  title                String
+  tableIds             Json     @default("[]")
+  modelConfigId        String
+  thinkingLevel        String   @default("off")
+  configurationVersion Int      @default(1)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  runs                 AskRun[]
+  savedResults         AskSavedQueryResult[]
+
+  @@index([ownerMemberNo, updatedAt, id])
+  @@map("ask_session")
+}
+model AskRunMessage {
+  id        String         @id @default(cuid())
+  askRunId  String
+  sequence  Int
+  role      AskMessageRole
+  content   Json
+  createdAt DateTime       @default(now())
+  askRun    AskRun         @relation(fields: [askRunId], references: [id], onDelete: Cascade)
+
+  @@unique([askRunId, sequence])
+  @@map("ask_run_message")
+}
+
+model AskRunEvent {
+  id        String   @id @default(cuid())
+  askRunId  String
+  sequence  Int
+  type      String
+  payload   Json
+  createdAt DateTime @default(now())
+  askRun    AskRun   @relation(fields: [askRunId], references: [id], onDelete: Cascade)
+
+  @@unique([askRunId, sequence])
+  @@index([askRunId, sequence])
+  @@map("ask_run_event")
+}
+
+model AskRunQuery {
+  id               String         @id @default(cuid())
+  askRunId         String
+  queryExecutionId String         @unique
+  createdAt        DateTime       @default(now())
+  askRun           AskRun         @relation(fields: [askRunId], references: [id], onDelete: Cascade)
+  queryExecution   QueryExecution @relation(fields: [queryExecutionId], references: [id], onDelete: Cascade)
+
+  @@index([askRunId])
+  @@map("ask_run_query")
+}
+model AskSavedQueryResult {
+  id               String   @id @default(cuid())
+  askSessionId     String
+  askRunId         String
+  queryExecutionId String   @unique
+  snapshot         Json
+  createdAt        DateTime @default(now())
+  askSession       AskSession @relation(fields: [askSessionId], references: [id], onDelete: Cascade)
+
+  @@index([askRunId])
+  @@map("ask_saved_query_result")
 }

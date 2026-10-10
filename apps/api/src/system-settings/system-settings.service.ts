@@ -1,8 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma, prisma } from "@eureka-atlas/database";
 import { DEFAULT_AI_SYSTEM_PROMPT } from "../governance/ai-prompt";
+import { ASK_SYSTEM_PROMPT } from "../ask/ask-prompt";
 
 const aiPromptKey = "ai_system_prompt";
+const askPromptKey = "ask_system_prompt";
 export const DEFAULT_GOVERNANCE_OPTIONS = {
   dataDomains: ["商品企划", "设计研发", "采购管理", "销售管理", "商品运营", "仓库管理", "客服管理", "财务管理", "人资管理", "运维管理"],
   permissionRelations: ["品牌项目名", "财务店铺名称", "ERP店铺名称", "平台店铺名称"],
@@ -14,21 +16,29 @@ type GovernanceOptionGroups = { dataDomains: GovernanceOptionRecord[]; permissio
 type GovernanceOptionType = "DATA_DOMAIN" | "PERMISSION_RELATION";
 @Injectable()
 export class SystemSettingsService {
-  async aiPrompt() {
-    const rows = await prisma.$queryRaw<Array<{ value: string }>>(Prisma.sql`SELECT "value" FROM "system_setting" WHERE "key" = ${aiPromptKey} LIMIT 1`);
-    return { prompt: rows[0]?.value ?? DEFAULT_AI_SYSTEM_PROMPT, defaultPrompt: DEFAULT_AI_SYSTEM_PROMPT, customized: rows.length > 0 };
+  askPrompt() { return this.promptSetting(askPromptKey, ASK_SYSTEM_PROMPT); }
+  saveAskPrompt(value: unknown) { return this.savePrompt(askPromptKey, ASK_SYSTEM_PROMPT, value); }
+  resetAskPrompt() { return this.resetPrompt(askPromptKey, ASK_SYSTEM_PROMPT); }
+  aiPrompt() { return this.promptSetting(aiPromptKey, DEFAULT_AI_SYSTEM_PROMPT); }
+  saveAiPrompt(value: unknown) { return this.savePrompt(aiPromptKey, DEFAULT_AI_SYSTEM_PROMPT, value); }
+  resetAiPrompt() { return this.resetPrompt(aiPromptKey, DEFAULT_AI_SYSTEM_PROMPT); }
+
+  private async promptSetting(key: string, defaultPrompt: string) {
+    const rows = await prisma.$queryRaw<Array<{ value: string }>>(Prisma.sql`SELECT "value" FROM "system_setting" WHERE "key" = ${key} LIMIT 1`);
+    return { prompt: rows[0]?.value ?? defaultPrompt, defaultPrompt, customized: rows.length > 0 };
   }
-  async saveAiPrompt(value: unknown) {
+  private async savePrompt(key: string, defaultPrompt: string, value: unknown) {
     const prompt = typeof value === "string" ? value.trim() : "";
     if (!prompt) throw new BadRequestException("System prompt cannot be empty");
     if (prompt.length > 30_000) throw new BadRequestException("System prompt must not exceed 30,000 characters");
-    await prisma.$executeRaw(Prisma.sql`INSERT INTO "system_setting" ("id", "key", "value", "createdAt", "updatedAt") VALUES (${crypto.randomUUID()}, ${aiPromptKey}, ${prompt}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = CURRENT_TIMESTAMP`);
-    return this.aiPrompt();
+    await prisma.$executeRaw(Prisma.sql`INSERT INTO "system_setting" ("id", "key", "value", "createdAt", "updatedAt") VALUES (${crypto.randomUUID()}, ${key}, ${prompt}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = CURRENT_TIMESTAMP`);
+    return this.promptSetting(key, defaultPrompt);
   }
-  async resetAiPrompt() {
-    await prisma.$executeRaw(Prisma.sql`DELETE FROM "system_setting" WHERE "key" = ${aiPromptKey}`);
-    return this.aiPrompt();
+  private async resetPrompt(key: string, defaultPrompt: string) {
+    await prisma.$executeRaw(Prisma.sql`DELETE FROM "system_setting" WHERE "key" = ${key}`);
+    return this.promptSetting(key, defaultPrompt);
   }
+
   async governanceOptions(): Promise<GovernanceOptions> {
     const records = await this.governanceOptionRecords();
     return {

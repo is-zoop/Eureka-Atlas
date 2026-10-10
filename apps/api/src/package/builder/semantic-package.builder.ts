@@ -1,116 +1,36 @@
-import { ColumnSemanticType } from "@eureka-atlas/database";
+import { createHash } from "node:crypto";
+type SemanticCatalogInfo = { id: string; name: string; description: string; aliases: string[]; usage_notes: string | null };
+type SemanticPackageIssue = { code: string; object_type: "TABLE" | "FIELD" | "METRIC"; object_id: string; path: string; message: string; affects: string };
+type QueryConfig = { default_stat_date: { field_id: string | null; format: string }; storage: "DATE_INCREMENTAL" | "FULL_SNAPSHOT" | null };
+type SemanticPackageField = { id: string; column: string; data_type: string; normalized_type: string; is_partition: boolean; name: string; type: "METRIC" | "DIMENSION" | "LABEL" | "PARTITION"; aggregation: string | null; unit: string | null; groupable: boolean; candidate_value_queryable: boolean; label_description: string | null; catalog: SemanticCatalogInfo | null };
+type SemanticPackageMetric = { id: string; name: string; type: "DERIVED"; formula: string; unit: string | null; dependencies: Array<{ id: string; column: string }>; catalog: SemanticCatalogInfo | null };
+export type SemanticPackage = { schema_version: 1; content_version: string; updated_at: string; source: { id: string; name: string; type: string; project: string; catalog: string; schema: string }; table: { id: string; name: string; data_domain: string | null; business_name: string; description: string; grain: string[]; query_config: QueryConfig }; fields: SemanticPackageField[]; metrics: SemanticPackageMetric[]; completeness: { status: "COMPLETE" | "INCOMPLETE"; issues: SemanticPackageIssue[] } };
 
-export type SemanticPackageContent = {
-  table: {
-    name: string;
-    data_domain: string | null;
-    business_name: string;
-    description: string;
-    grain: string;
-    permission_field: string | null;
-    permission_relation: string | null;
-  };
-  fields: Array<{
-    column: string;
-    name: string;
-    type: ColumnSemanticType;
-    aggregation: string | null;
-    unit: string | null;
-    groupable: boolean;
-    candidate_value_queryable: boolean;
-    label_description: string | null;
-  }>;
-  metrics: Array<{
-    name: string;
-    type: "DERIVED";
-    formula: string;
-    unit: string | null;
-    dependencies: Array<{
-      column: string;
-    }>;
-  }>;
-};
-
-type PackageSource = {
-  name: string;
-  semantic: {
-    businessName: string;
-    dataDomain: string | null;
-    description: string;
-    grain: string;
-    permissionRelation: string | null;
-    permissionColumn: { name: string } | null;
-  } | null;
-  columns: Array<{
-    name: string;
-    semantic: {
-      metricName: string;
-      semanticType: ColumnSemanticType;
-      aggregation: string | null;
-      unit: string | null;
-      groupable: boolean;
-      candidateValueQueryable: boolean;
-      labelDescription: string | null;
-    } | null;
-  }>;
-  semanticMetrics: Array<{
-    name: string;
-    formula: string;
-    unit: string | null;
-    dependencies: unknown;
-  }>;
-};
-
-export function buildSemanticPackage(
-  source: PackageSource,
-): SemanticPackageContent {
-  if (!source.semantic) throw new Error("Missing table semantic");
-  const fields = source.columns.flatMap((column) =>
-    column.semantic
-      ? [
-          {
-            column: column.name,
-            name: column.semantic.metricName,
-            type: column.semantic.semanticType,
-            aggregation: column.semantic.aggregation,
-            unit: column.semantic.unit,
-            groupable: (column.semantic.semanticType === ColumnSemanticType.DIMENSION || column.semantic.semanticType === ColumnSemanticType.LABEL) && column.semantic.groupable,
-            candidate_value_queryable: (column.semantic.semanticType === ColumnSemanticType.DIMENSION || column.semantic.semanticType === ColumnSemanticType.LABEL) && column.semantic.candidateValueQueryable,
-            label_description: column.semantic.semanticType === ColumnSemanticType.LABEL ? column.semantic.labelDescription : null,
-          },
-        ]
-      : [],
-  );
-  const metrics = (source.semanticMetrics ?? []).map((metric) => {
-    const dependencies = Array.isArray(metric.dependencies)
-      ? metric.dependencies.filter(
-          (item): item is {
-            column: string;
-            meta_column_id: string;
-          } => Boolean(item && typeof item === "object"),
-        )
-      : [];
-    return {
-      name: metric.name,
-      type: "DERIVED" as const,
-      formula: metric.formula,
-      unit: metric.unit,
-      dependencies: dependencies.map((dependency) => ({
-        column: dependency.column,
-      })),
-    };
-  });
-  return {
-    table: {
-      name: source.name,
-      data_domain: source.semantic.dataDomain,
-      business_name: source.semantic.businessName,
-      description: source.semantic.description,
-      grain: source.semantic.grain,
-      permission_field: source.semantic.permissionColumn?.name ?? null,
-      permission_relation: source.semantic.permissionRelation,
-    },
-    fields,
-    metrics,
-  };
+type Catalog = { id: string; name: string; description: string; aliases: unknown; usageNotes: string | null; status: string; updatedAt: Date };
+type ColumnSemantic = { id: string; metricName: string; semanticType: "METRIC" | "DIMENSION" | "LABEL" | "PARTITION"; aggregation: string | null; unit: string | null; groupable: boolean; candidateValueQueryable: boolean; labelDescription: string | null; updatedAt: Date; metricCatalogBindings: Array<{ metricCatalog: Catalog | null }>; dimensionCatalogBinding: { dimensionCatalog: Catalog | null } | null };
+export type PackageBuildSource = { table: { id: string; name: string; status: string; updatedAt: Date; metaProject: { id: string; name: string; catalog: string; schema: string; status: string; updatedAt: Date; dataSource: { id: string; name: string; type: string; updatedAt: Date } }; semantic: { id: string; businessName: string; dataDomain: string | null; description: string; grain: string; queryConfig: unknown; updatedAt: Date } | null; columns: Array<{ id: string; name: string; dataType: string; normalizedType: string; isPartition: boolean; status: string; updatedAt: Date; semantic: ColumnSemantic | null }>; semanticMetrics: Array<{ id: string; name: string; formula: string; unit: string | null; dependencies: unknown; updatedAt: Date; catalogBindings: Array<{ metricCatalog: Catalog | null }> }> } };
+const string = (value: unknown) => typeof value === "string" ? value.trim() : "";
+const object = (value: unknown) => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const aliases = (value: unknown) => Array.isArray(value) ? [...new Set(value.map(string).filter(Boolean))].sort() : [];
+const catalogInfo = (catalog: Catalog | null | undefined): SemanticCatalogInfo | null => catalog && catalog.status === "PUBLISHED" ? { id: catalog.id, name: catalog.name, description: catalog.description, aliases: aliases(catalog.aliases), usage_notes: catalog.usageNotes } : null;
+const dependencies = (value: unknown) => Array.isArray(value) ? value.flatMap((item) => { const entry = object(item); const id = string(entry.meta_column_id); const column = string(entry.column); return id && column ? [{ id, column }] : []; }) : [];
+const canonical = (value: unknown): string => Array.isArray(value) ? "[" + value.map(canonical).join(",") + "]" : value && typeof value === "object" ? "{" + Object.keys(value as Record<string, unknown>).sort().map((key) => JSON.stringify(key) + ":" + canonical((value as Record<string, unknown>)[key])).join(",") + "}" : JSON.stringify(value);
+const addIssue = (issues: SemanticPackageIssue[], issue: SemanticPackageIssue) => { if (!issues.some((candidate) => candidate.code === issue.code && candidate.object_id === issue.object_id && candidate.path === issue.path)) issues.push(issue); };
+function config(value: unknown): QueryConfig {
+  const raw = object(value); const date = object(raw.default_stat_date); const storage = string(raw.storage);
+  return { default_stat_date: { field_id: string(date.field_id) || null, format: string(date.format) }, storage: ["DATE_INCREMENTAL", "FULL_SNAPSHOT"].includes(storage) ? storage as QueryConfig["storage"] : null };
+}
+export function buildSemanticPackage(source: PackageBuildSource): SemanticPackage {
+  const semantic = source.table.semantic; if (!semantic) throw new Error("Missing table semantic");
+  const active = source.table.columns.filter((column) => column.status === "ACTIVE"); const byId = new Map(active.map((column) => [column.id, column])); const byName = new Map(active.map((column) => [column.name, column]));
+  const queryConfig = config(semantic.queryConfig); const issues: SemanticPackageIssue[] = [];
+  if (queryConfig.default_stat_date.field_id && !byId.has(queryConfig.default_stat_date.field_id)) addIssue(issues, { code: "DEFAULT_STAT_DATE_INVALID", object_type: "TABLE", object_id: source.table.id, path: "table.query_config.default_stat_date.field_id", message: "默认统计日期字段不存在或已失效", affects: "默认时间筛选" });
+  if (queryConfig.storage && !active.some((column) => column.isPartition)) addIssue(issues, { code: "STORAGE_MODE_NOT_APPLICABLE", object_type: "TABLE", object_id: source.table.id, path: "table.query_config.storage", message: "非分区表不能设置存储方式", affects: "查询方式" });
+  const grain = semantic.grain.split(",").map((name) => name.trim()).filter(Boolean); for (const name of grain) if (!byName.has(name)) addIssue(issues, { code: "GRAIN_FIELD_INVALID", object_type: "TABLE", object_id: source.table.id, path: "table.grain", message: "粒度字段 " + name + " 不存在或已失效", affects: "聚合与分组" });
+  const fields: SemanticPackageField[] = active.flatMap((column) => { if (!column.semantic) return []; const item = column.semantic; const isMetric = item.semanticType === "METRIC"; const catalog = isMetric ? catalogInfo(item.metricCatalogBindings[0]?.metricCatalog) : item.semanticType === "DIMENSION" ? catalogInfo(item.dimensionCatalogBinding?.dimensionCatalog) : null; if ((isMetric || item.semanticType === "DIMENSION") && !catalog) addIssue(issues, { code: "CATALOG_BINDING_MISSING", object_type: "FIELD", object_id: column.id, path: "fields.catalog", message: (isMetric ? "指标" : "维度") + "缺少有效的中心目录绑定", affects: "语义检索与说明" }); return [{ id: column.id, column: column.name, data_type: column.dataType, normalized_type: column.normalizedType, is_partition: column.isPartition, name: item.metricName, type: item.semanticType, aggregation: item.aggregation, unit: item.unit, groupable: item.groupable, candidate_value_queryable: item.candidateValueQueryable, label_description: item.labelDescription, catalog }]; }).sort((left, right) => left.column.localeCompare(right.column));
+  const metrics: SemanticPackageMetric[] = source.table.semanticMetrics.flatMap((metric) => { const metricDependencies = dependencies(metric.dependencies); const invalid = metricDependencies.find((dependency) => !byId.has(dependency.id)); if (invalid) { addIssue(issues, { code: "METRIC_DEPENDENCY_INVALID", object_type: "METRIC", object_id: metric.id, path: "metrics.dependencies", message: "计算指标 " + metric.name + " 依赖已失效字段 " + invalid.column, affects: "计算指标" }); return []; } const catalog = catalogInfo(metric.catalogBindings[0]?.metricCatalog); if (!catalog) addIssue(issues, { code: "CATALOG_BINDING_MISSING", object_type: "METRIC", object_id: metric.id, path: "metrics.catalog", message: "计算指标 " + metric.name + " 缺少有效的中心目录绑定", affects: "语义检索与说明" }); return [{ id: metric.id, name: metric.name, type: "DERIVED" as const, formula: metric.formula, unit: metric.unit, dependencies: metricDependencies.sort((left, right) => left.id.localeCompare(right.id)), catalog }]; }).sort((left, right) => left.name.localeCompare(right.name));
+  const catalogDates = [...active.flatMap((column) => column.semantic ? [...column.semantic.metricCatalogBindings.map((binding) => binding.metricCatalog?.updatedAt), column.semantic.dimensionCatalogBinding?.dimensionCatalog?.updatedAt] : []), ...source.table.semanticMetrics.flatMap((metric) => metric.catalogBindings.map((binding) => binding.metricCatalog?.updatedAt))].filter((date): date is Date => Boolean(date));
+  const updated = [source.table.updatedAt, source.table.metaProject.updatedAt, source.table.metaProject.dataSource.updatedAt, semantic.updatedAt, ...active.flatMap((column) => [column.updatedAt, ...(column.semantic ? [column.semantic.updatedAt] : [])]), ...source.table.semanticMetrics.map((metric) => metric.updatedAt), ...catalogDates].map((date) => date.getTime());
+  const base = { schema_version: 1 as const, source: { id: source.table.metaProject.dataSource.id, name: source.table.metaProject.dataSource.name, type: source.table.metaProject.dataSource.type, project: source.table.metaProject.name, catalog: source.table.metaProject.catalog, schema: source.table.metaProject.schema }, table: { id: source.table.id, name: source.table.name, data_domain: semantic.dataDomain, business_name: semantic.businessName, description: semantic.description, grain, query_config: queryConfig }, fields, metrics, completeness: { status: issues.length ? "INCOMPLETE" as const : "COMPLETE" as const, issues: issues.sort((left, right) => (left.object_type + ":" + left.object_id + ":" + left.code).localeCompare(right.object_type + ":" + right.object_id + ":" + right.code)) } };
+  return { content_version: createHash("sha256").update(canonical(base)).digest("hex"), updated_at: new Date(Math.max(...updated)).toISOString(), ...base };
 }

@@ -6,6 +6,9 @@ import { ModelConfigService } from "../model-config/model-config.service";
 export class SystemSettingsController {
   constructor(private readonly settings: SystemSettingsService, private readonly models: ModelConfigService) {}
   @Get("ai-prompt") getAiPrompt() { return this.settings.aiPrompt(); }
+  @Get("ask-prompt") getAskPrompt() { return this.settings.askPrompt(); }
+  @Put("ask-prompt") saveAskPrompt(@Body() body: { prompt?: unknown }) { return this.settings.saveAskPrompt(body?.prompt); }
+  @Delete("ask-prompt") resetAskPrompt() { return this.settings.resetAskPrompt(); }
   @Put("ai-prompt") saveAiPrompt(@Body() body: { prompt?: unknown }) { return this.settings.saveAiPrompt(body?.prompt); }
   @Delete("ai-prompt") resetAiPrompt() { return this.settings.resetAiPrompt(); }
   @Get("active-ai-model") activeAiModel() { return this.models.current(); }

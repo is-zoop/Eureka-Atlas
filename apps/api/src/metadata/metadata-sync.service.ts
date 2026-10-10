@@ -597,7 +597,7 @@ export class MetadataSyncService implements OnModuleInit {
       where,
       include: {
         metaProject: true,
-        semantic: { select: { id: true } },
+        semantic: { select: { id: true, publishedByName: true } },
         semanticPackage: { select: { id: true } },
         governanceTasks: {
           where: { status: { not: GovernanceTaskStatus.COMPLETED } },
@@ -629,6 +629,7 @@ export class MetadataSyncService implements OnModuleInit {
         source: table.metaProject.dataSourceId,
         columnCount: table._count.columns,
         updatedAt: table.sourceUpdatedAt ?? table.updatedAt,
+        lastUpdatedBy: table.semantic?.publishedByName ?? null,
         governanceStatus: table.semantic
           ? "COMPLETED"
           : table.governanceTasks.length
@@ -653,7 +654,7 @@ export class MetadataSyncService implements OnModuleInit {
       where: { id },
       include: {
         metaProject: true,
-        semantic: { select: { id: true } },
+        semantic: { select: { id: true, publishedByName: true } },
         semanticPackage: { select: { id: true } },
         governanceTasks: {
           where: { status: { not: GovernanceTaskStatus.COMPLETED } },
@@ -672,6 +673,7 @@ export class MetadataSyncService implements OnModuleInit {
       catalog: table.metaProject.catalog,
       schema: table.metaProject.schema,
       updatedAt: table.sourceUpdatedAt ?? table.updatedAt,
+      lastUpdatedBy: table.semantic?.publishedByName ?? null,
       status: table.status,
       governanceStatus: table.semantic
         ? "COMPLETED"

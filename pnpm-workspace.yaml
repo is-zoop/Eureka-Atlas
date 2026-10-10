@@ -2,13 +2,25 @@ packages:
   - apps/*
   - packages/*
 
+nodeLinker: isolated
+hoistPattern: []
+
 allowBuilds:
   '@alicloud/openapi-core': true
   '@google/genai': true
   "@prisma/client": true
   "@prisma/engines": true
+  '@scarf/scarf': false
   better-sqlite3: true
   esbuild: true
   oracledb: true
   prisma: true
   protobufjs: true
+
+packageExtensions:
+  '@alicloud/openapi-core@1.0.8':
+    dependencies:
+      '@alicloud/tea-typescript': ^1.8.0
+  '@alicloud/credentials@2.4.7':
+    dependencies:
+      debug: ^4.4.3

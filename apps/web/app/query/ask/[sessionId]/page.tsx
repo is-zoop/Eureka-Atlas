@@ -1,0 +1,2 @@
+import { AskWorkbench } from "@/components/ask/ask-workbench";
+export default async function AskSessionPage({ params }: { params: Promise<{ sessionId: string }> }) { const { sessionId } = await params; return <AskWorkbench initialSessionId={sessionId} />; }

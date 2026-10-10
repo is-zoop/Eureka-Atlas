@@ -42,6 +42,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { CalculatedMetrics, type AiMetricSuggestion, type MetricDraft } from "@/components/governance/calculated-metrics";
+
 import { AiGenerationDialog, type AiGeneration } from "@/components/governance/ai-generation-dialog";
 import { api } from "@/lib/api";
 
@@ -60,6 +61,11 @@ type TableInfo = {
   type: string;
   comment?: string | null;
 };
+type QueryConfig = { default_stat_date: { field_id: string | null; format: string }; storage: "DATE_INCREMENTAL" | "FULL_SNAPSHOT" | null };
+const defaultQueryConfig = (): QueryConfig => ({ default_stat_date: { field_id: null, format: "" }, storage: null });
+const dateFormatOptions = [{ value: "yyyyMMdd", label: "yyyyMMdd（如 20260929）" }, { value: "yyyy-MM-dd", label: "yyyy-MM-dd（如 2026-09-29）" }, { value: "yyyy/MM/dd", label: "yyyy/MM/dd" }, { value: "yyyy-MM-dd HH:mm:ss", label: "yyyy-MM-dd HH:mm:ss" }, { value: "__custom", label: "自定义格式" }];
+const storageLabels: Record<NonNullable<QueryConfig["storage"]>, string> = { DATE_INCREMENTAL: "日期增量", FULL_SNAPSHOT: "全量快照" };
+
 type TableDraft = {
   dataDomain: string | null;
   businessName: string;
@@ -67,6 +73,7 @@ type TableDraft = {
   grain: string;
   permissionColumnId: string | null;
   permissionRelation: string | null;
+  queryConfig: QueryConfig;
 };
 type ColumnDraft = {
   metaColumnId: string;
@@ -123,9 +130,11 @@ const semanticTableMinWidths: Record<ColumnDraft["semanticType"], string> = {
   METRIC: "min-w-[1152px]",
   DIMENSION: "min-w-[1168px]",
   LABEL: "min-w-[1072px]",
-  PARTITION: "min-w-[848px]",
+  PARTITION: "min-w-[1008px]",
 };
 const supportsGrouping = (type: ColumnDraft["semanticType"]) =>
+  type === "DIMENSION" || type === "LABEL" || type === "PARTITION";
+const supportsCandidateValues = (type: ColumnDraft["semanticType"]) =>
   type === "DIMENSION" || type === "LABEL";
 const initialColumnDraft = (column: Field): ColumnDraft => {
   const semanticType = classify(column);
@@ -136,7 +145,7 @@ const initialColumnDraft = (column: Field): ColumnDraft => {
     aggregation: "",
     unit: "",
     groupable: supportsGrouping(semanticType),
-    candidateValueQueryable: supportsGrouping(semanticType),
+    candidateValueQueryable: supportsCandidateValues(semanticType),
     labelDescription: "",
   };
 };
@@ -145,7 +154,7 @@ const normalizeColumnDraft = (column: ColumnDraft): ColumnDraft => ({
   aggregation: column.semanticType === "METRIC" ? column.aggregation : "",
   unit: column.semanticType === "METRIC" ? column.unit : "",
   groupable: supportsGrouping(column.semanticType) ? column.groupable !== false : false,
-  candidateValueQueryable: supportsGrouping(column.semanticType) ? column.candidateValueQueryable !== false : false,
+  candidateValueQueryable: supportsCandidateValues(column.semanticType) ? column.candidateValueQueryable !== false : false,
   labelDescription: column.semanticType === "LABEL" ? column.labelDescription : "",
 });
 function AiHint({ value, onAdopt, emptyText }: { value?: string | boolean | null; onAdopt?: () => void; emptyText?: string }) {
@@ -155,6 +164,7 @@ function AiHint({ value, onAdopt, emptyText }: { value?: string | boolean | null
 }
 const numericType =
   /^(tinyint|smallint|int|integer|bigint|float|double|real|decimal|numeric)(\b|\()/i;
+const clearQueryConfigField = (value: QueryConfig, fieldId: string): QueryConfig => value.default_stat_date.field_id === fieldId ? { ...value, default_stat_date: { field_id: null, format: "" } } : value;
 const classify = (column: Field): ColumnDraft["semanticType"] =>
   column.isPartition
     ? "PARTITION"
@@ -205,7 +215,7 @@ function WorkspaceContent() {
   );
   const [generationOpen, setGenerationOpen] = useState(false);
   const [activeGeneration, setActiveGeneration] = useState<AiGeneration | null>(null);
-  const [showAiSuggestions, setShowAiSuggestions] = useState(true);
+  const [showAiSuggestions, setShowAiSuggestions] = useState(false);
   const [permissionRelationOpen, setPermissionRelationOpen] = useState(false);
   const [editingMetricId, setEditingMetricId] = useState<string | null>(null);
   const [activeSemanticTab, setActiveSemanticTab] = useState("table");
@@ -236,7 +246,7 @@ function WorkspaceContent() {
     void api<Workspace | null>(`/governance/workspaces/by-table/${tableId}${initialTask ? `?task=${encodeURIComponent(initialTask)}` : ""}`)
       .then(async (result) => {
         if (cancelled) return;
-        if (result) { apply(result); return; }
+        if (result) { setShowAiSuggestions(false); apply(result); return; }
         const [detail, columns] = await Promise.all([api<Detail>(`/metadata/tables/${tableId}`), api<Field[]>(`/metadata/tables/${tableId}/columns`)]);
         if (cancelled) return;
         setAllColumns(columns);
@@ -248,6 +258,7 @@ function WorkspaceContent() {
             grain: "",
             permissionColumnId: null,
             permissionRelation: null,
+            queryConfig: defaultQueryConfig(),
           },
           columns: [],
           metrics: [],
@@ -299,12 +310,13 @@ function WorkspaceContent() {
       })),
     [allColumns, columnById, selectedColumns],
   );
-  const updateTable = (key: keyof TableDraft, next: string | null) =>
+  const updateTable = (key: Exclude<keyof TableDraft, "queryConfig">, next: string | null) =>
     setDraft((current) =>
       current
         ? { ...current, table: { ...current.table, [key]: next } }
         : current,
     );
+  const updateQueryConfig = (queryConfig: QueryConfig) => setDraft((current) => current ? { ...current, table: { ...current.table, queryConfig } } : current);
   const updateColumn = (id: string, key: keyof ColumnDraft, next: string | boolean) => {
     setDraft((current) =>
       current
@@ -316,7 +328,10 @@ function WorkspaceContent() {
                     ...column,
                     [key]: next,
                     ...(key === "semanticType" && supportsGrouping(next as ColumnDraft["semanticType"]) && !supportsGrouping(column.semanticType)
-                      ? { groupable: true, candidateValueQueryable: true }
+                      ? { groupable: true }
+                      : {}),
+                    ...(key === "semanticType" && supportsCandidateValues(next as ColumnDraft["semanticType"]) && !supportsCandidateValues(column.semanticType)
+                      ? { candidateValueQueryable: true }
                       : {}),
                   } as ColumnDraft)
                 : column,
@@ -343,6 +358,7 @@ function WorkspaceContent() {
                     grain: draftValue.table.grain.split(",").map((item) => item.trim()).filter((item) => item && item !== column.name).join(", "),
                     permissionColumnId: draftValue.table.permissionColumnId === column.id ? null : draftValue.table.permissionColumnId,
                     permissionRelation: draftValue.table.permissionColumnId === column.id ? null : draftValue.table.permissionRelation,
+                    queryConfig: clearQueryConfigField(draftValue.table.queryConfig, column.id),
                   }
                 : draftValue.table,
               columns: selected
@@ -363,7 +379,7 @@ function WorkspaceContent() {
     if (selectedColumns.length === allColumns.length) {
       setSelectedColumns([]);
       setPermissionRelationOpen(false);
-      setDraft((current) => (current ? { ...current, table: { ...current.table, grain: "", permissionColumnId: null, permissionRelation: null }, columns: [] } : current));
+      setDraft((current) => (current ? { ...current, table: { ...current.table, grain: "", permissionColumnId: null, permissionRelation: null, queryConfig: defaultQueryConfig() }, columns: [] } : current));
       return;
     }
     setSelectedColumns(allColumns.map((column) => column.id));
@@ -458,7 +474,7 @@ function WorkspaceContent() {
       setWorking("");
     }
   };
-  const adoptTable = (key: keyof Omit<TableDraft, "permissionColumnId" | "permissionRelation">) => {
+  const adoptTable = (key: keyof Omit<TableDraft, "permissionColumnId" | "permissionRelation" | "queryConfig">) => {
     const ai = workspace?.ai?.table;
     if (ai && ai[key] !== null && ai[key] !== "") updateTable(key, ai[key]);
   };
@@ -475,6 +491,16 @@ function WorkspaceContent() {
     setDraft((current) => current ? { ...current, table: { ...current.table, permissionColumnId: ai.permissionColumnId, permissionRelation: ai.permissionRelation } } : current);
     setPermissionRelationOpen(false);
   };
+  const adoptStorageSuggestion = () => {
+    const storage = workspace?.ai?.table.queryConfig.storage;
+    if (!storage) return;
+    updateQueryConfig({ ...draft!.table.queryConfig, storage });
+  };
+  const adoptDefaultStatDateSuggestion = () => {
+    const defaultStatDate = workspace?.ai?.table.queryConfig.default_stat_date;
+    if (!defaultStatDate?.field_id) return;
+    updateQueryConfig({ ...draft!.table.queryConfig, default_stat_date: defaultStatDate });
+  };
   const adoptAllAi = () => {
     const ai = workspace?.ai;
     if (!ai) return;
@@ -488,6 +514,7 @@ function WorkspaceContent() {
         ...(ai.table.description ? { description: ai.table.description } : {}),
         ...(ai.table.grain ? { grain: ai.table.grain } : {}),
         ...(ai.table.permissionColumnId && ai.table.permissionRelation ? { permissionColumnId: ai.table.permissionColumnId, permissionRelation: ai.table.permissionRelation } : {}),
+        queryConfig: ai.table.queryConfig,
       },
       columns: current.columns.map((column) => {
         const suggestion = aiColumns.get(column.metaColumnId);
@@ -570,6 +597,7 @@ function WorkspaceContent() {
           if (!id) return;
           const result = await api<Workspace>(`/governance/workspaces/${id}`);
           apply(result);
+          setShowAiSuggestions(true);
           setNotice("AI 建议已生成，可逐项采用");
         }}
       />
@@ -686,7 +714,12 @@ function WorkspaceContent() {
                           {showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.grain} emptyText="AI 未能识别已选粒度字段，请人工选择" onAdopt={() => adoptTable("grain")} />}
                         </div>
                       </Field>
-                      <Field className="min-w-0">
+                      <Field className="min-w-0 order-3">
+                        <FieldLabel>默认统计日期</FieldLabel>
+                        <div className="min-w-0 space-y-2"><div className="flex h-10 min-w-0 rounded-md border border-slate-300 bg-white shadow-sm"><Combobox className="h-full min-w-0 flex-1" inputClassName={`h-full border-0 shadow-none ${draft.table.queryConfig.default_stat_date.field_id ? "rounded-l-md rounded-r-none" : "rounded-md"}`} value={draft.table.queryConfig.default_stat_date.field_id ?? ""} onValueChange={(fieldId) => updateQueryConfig({ ...draft.table.queryConfig, default_stat_date: { field_id: fieldId || null, format: fieldId ? draft.table.queryConfig.default_stat_date.format : "" } })} placeholder="选择字段" searchPlaceholder="选择默认统计日期" options={[{ value: "", label: "不设置默认日期" }, ...selectedFieldOptions]} />{draft.table.queryConfig.default_stat_date.field_id && <Combobox className="h-full w-52 shrink-0 border-l border-slate-200" inputClassName="h-full rounded-l-none border-0 shadow-none" value={dateFormatOptions.some((option) => option.value === draft.table.queryConfig.default_stat_date.format) ? draft.table.queryConfig.default_stat_date.format : "__custom"} onValueChange={(format) => updateQueryConfig({ ...draft.table.queryConfig, default_stat_date: { ...draft.table.queryConfig.default_stat_date, format: format === "__custom" ? "" : format } })} placeholder="日期格式" options={dateFormatOptions} />}</div>{draft.table.queryConfig.default_stat_date.field_id && !dateFormatOptions.some((option) => option.value === draft.table.queryConfig.default_stat_date.format) && <Input value={draft.table.queryConfig.default_stat_date.format} onChange={(event) => updateQueryConfig({ ...draft.table.queryConfig, default_stat_date: { ...draft.table.queryConfig.default_stat_date, format: event.target.value } })} placeholder="自定义格式，例如 dd/MM/yyyy" />}{showAiSuggestions && workspace?.ai && <AiHint value={workspace?.ai?.table.queryConfig.default_stat_date.field_id ? `${selectedFieldOptions.find((option) => option.value === workspace.ai?.table.queryConfig.default_stat_date.field_id)?.label ?? ""}${workspace?.ai?.table.queryConfig.default_stat_date.format ? ` · ${workspace?.ai?.table.queryConfig.default_stat_date.format}` : ""}` : null} emptyText="AI 未能判断，请人工选择" onAdopt={adoptDefaultStatDateSuggestion} />}</div>
+                      </Field>
+                      {allColumns.some((column) => column.isPartition) && <Field className="min-w-0 order-2"><FieldLabel>存储方式</FieldLabel><div className="space-y-1"><Combobox value={draft.table.queryConfig.storage ?? ""} onValueChange={(storage) => updateQueryConfig({ ...draft.table.queryConfig, storage: storage ? storage as QueryConfig["storage"] : null })} placeholder="选择存储方式" options={[{ value: "", label: "未设置" }, { value: "DATE_INCREMENTAL", label: "日期增量" }, { value: "FULL_SNAPSHOT", label: "全量快照" }]} />{showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.queryConfig.storage ? storageLabels[workspace.ai.table.queryConfig.storage] : null} emptyText="AI 未能判断，请人工选择" onAdopt={adoptStorageSuggestion} />}</div></Field>}
+                      <Field className="min-w-0 order-1">
                         <FieldLabel>权限字段</FieldLabel>
                         <div className="min-w-0 space-y-1"><div className="flex h-10 min-w-0 rounded-md border border-slate-300 bg-white shadow-sm">
                           <Combobox
@@ -713,7 +746,7 @@ function WorkspaceContent() {
                           )}
                         </div>{showAiSuggestions && workspace?.ai && <AiHint value={workspace?.ai?.table.permissionColumnId && workspace?.ai?.table.permissionRelation ? `${selectedFieldOptions.find((option) => option.value === workspace?.ai?.table.permissionColumnId)?.label ?? ""} · ${workspace?.ai?.table.permissionRelation}` : null} emptyText="AI 未能判断，请人工维护" onAdopt={adoptPermissionSuggestion} />}</div>
                       </Field>
-                      <Field className="md:col-span-2">
+                      <Field className="order-4 md:col-span-2">
                         <FieldLabel>业务描述</FieldLabel>
                         <div className="space-y-1">
                           <div className="flex gap-2">
@@ -735,8 +768,7 @@ function WorkspaceContent() {
                   </div>
                 ) : (
                   <div className="semantic-groups-scroll h-full min-w-0 overflow-y-auto">
-                    <div className="space-y-3 pr-2">
-                      {groupedColumns
+                    <div className="space-y-3 pr-2">                      {groupedColumns
                         .filter((group) => group.items.length)
                         .map((group) => (
                           <section
@@ -773,7 +805,8 @@ function WorkspaceContent() {
                                   <col className="w-56" />
                                   <col className="w-44" />
                                   {group.type === "LABEL" && <col className="w-56" />}
-                                  {supportsGrouping(group.type) && <><col className="w-40" /><col className="w-40" /></>}
+                                  {supportsGrouping(group.type) && <col className="w-40" />}
+                                  {supportsCandidateValues(group.type) && <col className="w-40" />}
                                   {group.type === "METRIC" && <><col className="w-40" /><col className="w-36" /></>}
                                 </colgroup>
                                 <thead>
@@ -784,7 +817,8 @@ function WorkspaceContent() {
                                     <DataTableHead>{group.type !== "PARTITION" && <span className="mr-1 text-rose-500">*</span>}{nameLabels[group.type]}</DataTableHead>
                                     <DataTableHead>{group.type !== "PARTITION" && <span className="mr-1 text-rose-500">*</span>}字段类型</DataTableHead>
                                     {group.type === "LABEL" && <DataTableHead>标签说明</DataTableHead>}
-                                    {supportsGrouping(group.type) && <><DataTableHead><span className="mr-1 text-rose-500">*</span>是否可以分组</DataTableHead><DataTableHead><span className="mr-1 text-rose-500">*</span>候选值查询</DataTableHead></>}
+                                    {supportsGrouping(group.type) && <DataTableHead><span className="mr-1 text-rose-500">*</span>是否可以分组</DataTableHead>}
+                                    {supportsCandidateValues(group.type) && <DataTableHead><span className="mr-1 text-rose-500">*</span>候选值查询</DataTableHead>}
                                     {group.type === "METRIC" && <><DataTableHead><span className="mr-1 text-rose-500">*</span>聚合方式</DataTableHead><DataTableHead>单位</DataTableHead></>}
                                   </tr>
                                 </thead>
@@ -839,7 +873,7 @@ function WorkspaceContent() {
                                               </ToggleGroup>{showAiSuggestions && <AiHint value={ai?.groupable} onAdopt={() => adoptColumn(column.id, "groupable")} />}</div>
                                             </DataTableCell>
                                           )}
-                                          {supportsGrouping(group.type) && (
+                                          {supportsCandidateValues(group.type) && (
                                             <DataTableCell>
                                               <div className="space-y-1"><ToggleGroup
                                                 type="single"
