@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException, 
 import { isDeepStrictEqual } from "node:util";
 import { requireMemberNo } from "../auth/member-no";
 import { DataSourceType, QueryExecutionKind, Prisma, QueryExecutionStatus, prisma } from "@eureka-atlas/database";
-import type { DataQueryRequest, DimensionValuesRequest, QueryExecution, QueryRequest, QueryResult, QueryResultColumn, SemanticPackage } from "@eureka-atlas/types" with { "resolution-mode": "import" };
+import type { DataDimensionValuesRequest, DataQueryRequest, DimensionValuesRequest, QueryExecution, QueryRequest, QueryResult, QueryResultColumn, SemanticPackage } from "@eureka-atlas/types" with { "resolution-mode": "import" };
 import { DatasourceService } from "../datasource/datasource.service";
 import { MaxComputeClient } from "../metadata/maxcompute.client";
 import { PackageService } from "../package/package.service";
@@ -96,6 +96,10 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     const compiled = this.compiler.compileDimensionValues(pkg, input, { snapshotDate: await this.resolveSnapshot(pkg),completeDays,candidateSearch:completeDays });
     return this.createAndSubmit(memberNo, pkg, input, compiled, input.idempotency_key);
   }
+  async submitDataDimensionValues(memberNo: string, pkg: SemanticPackage, input: DataDimensionValuesRequest, compiled: CompiledQuery): Promise<QueryExecution> {
+    this.assertMaxCompute(pkg.source.type);
+    return this.createAndSubmit(memberNo, pkg, { ...input, limit: compiled.limit }, compiled, input.idempotency_key);
+  }
   async submitData(memberNo: string, pkg: SemanticPackage, input: DataQueryRequest, compiled: CompiledQuery & {resolvedDates:Array<{field_id:string;start:string;end:string}>}) {
     this.assertMaxCompute(pkg.source.type);
     return this.createAndSubmit(memberNo,pkg,input,compiled,input.idempotency_key,QueryExecutionKind.DATA_QUERY,compiled.resolvedDates);
@@ -140,7 +144,7 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     return this.toResponse(await this.require(id));
   }
 
-  private async createAndSubmit(memberNo: string, pkg: Awaited<ReturnType<PackageService["get"]>>, request: QueryRequest | DimensionValuesRequest | DataQueryRequest, compiled: CompiledQuery, idempotencyKey?: string, kind: QueryExecutionKind = QueryExecutionKind.SEMANTIC_QUERY, resolvedDates: Array<{field_id:string;start:string;end:string}> = []) {
+  private async createAndSubmit(memberNo: string, pkg: Awaited<ReturnType<PackageService["get"]>>, request: QueryRequest | DimensionValuesRequest | DataQueryRequest | DataDimensionValuesRequest, compiled: CompiledQuery, idempotencyKey?: string, kind: QueryExecutionKind = QueryExecutionKind.SEMANTIC_QUERY, resolvedDates: Array<{field_id:string;start:string;end:string}> = []) {
     requireMemberNo(memberNo);
     const replay = (existing: Awaited<ReturnType<QueryExecutionService["require"]>>) => {
       if ((existing.kind && existing.kind !== kind) || !isDeepStrictEqual(existing.request, JSON.parse(JSON.stringify(request)))) {

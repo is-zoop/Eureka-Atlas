@@ -6,3 +6,7 @@ coverage/
 .env.local
 !.env.example
 packages/database/generated/
+apps/wps-addin/.build-tools/
+apps/wps-addin/.installer-build/
+apps/wps-addin/release/
+apps/wps-addin/dist-desktop/

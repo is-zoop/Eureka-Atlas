@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,14 +61,6 @@ export function Combobox({
   const visibleOptions = searchable ? options.filter((option) => option.label.toLowerCase().includes(normalizedQuery)) : options;
   const visibleGroups = groups?.map((group) => ({ ...group, options: searchable ? group.options.filter((option) => option.label.toLowerCase().includes(normalizedQuery)) : group.options })).filter((group) => group.options.length);
 
-  React.useEffect(() => {
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, []);
-
   const choose = (nextValue: string) => {
     onValueChange(nextValue);
     setQuery("");
@@ -96,7 +89,9 @@ export function Combobox({
   };
 
   return (
-    <div ref={rootRef} className={cn("relative", className)}>
+    <PopoverPrimitive.Root open={open} onOpenChange={setOpen}>
+      <PopoverPrimitive.Anchor asChild>
+        <div ref={rootRef} className={cn("relative", className)}>
       {searchable ? (
         <Input
           ref={inputRef}
@@ -126,11 +121,23 @@ export function Combobox({
         </Button>
       )}
       {searchable && <ChevronDown className="pointer-events-none absolute right-2 top-1/2 size-4 -translate-y-1/2 text-slate-400" />}
-      {open && (
-        <div role="listbox" className={cn("absolute left-0 z-50 max-h-60 w-full overflow-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg", menuPlacement === "top" ? "bottom-[calc(100%+4px)]" : "top-[calc(100%+4px)]", menuClassName)}>
-          {(visibleGroups ? visibleGroups.length : visibleOptions.length) ? (visibleGroups ? visibleGroups.flatMap((group) => [<p key={group.label} className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase text-slate-500">{group.label}</p>, ...group.options.map(optionRow)]) : visibleOptions.map(optionRow)) : <p className="px-2 py-6 text-center text-[13px] text-slate-500">{emptyText}</p>}
         </div>
-      )}
-    </div>
+      </PopoverPrimitive.Anchor>
+      {open && <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Content
+          role="listbox"
+          align="start"
+          side={menuPlacement}
+          sideOffset={4}
+          collisionPadding={8}
+          onOpenAutoFocus={event => event.preventDefault()}
+          onCloseAutoFocus={event => event.preventDefault()}
+          onInteractOutside={event => { if (rootRef.current?.contains(event.detail.originalEvent.target as Node)) event.preventDefault(); }}
+          className={cn("shadcn-scrollbar z-50 max-h-[min(15rem,var(--radix-popover-content-available-height))] w-[var(--radix-popover-trigger-width)] overflow-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg outline-none", menuClassName)}
+        >
+          {(visibleGroups ? visibleGroups.length : visibleOptions.length) ? (visibleGroups ? visibleGroups.flatMap((group) => [<p key={group.label} className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase text-slate-500">{group.label}</p>, ...group.options.map(optionRow)]) : visibleOptions.map(optionRow)) : <p className="px-2 py-6 text-center text-[13px] text-slate-500">{emptyText}</p>}
+        </PopoverPrimitive.Content>
+      </PopoverPrimitive.Portal>}
+    </PopoverPrimitive.Root>
   );
 }

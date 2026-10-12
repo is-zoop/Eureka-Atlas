@@ -59,7 +59,21 @@ Business modules are scaffolded only in this milestone. DataWorks integration, g
 
 ## 数据查询部署
 
+### 保存查询与我的查询
+
+在查询配置顶部使用「保存查询」命名并保存数据集、模式、字段顺序、筛选关系及排序。「我的查询」从右侧抽屉打开本人配置进行编辑，不自动执行。打开已有配置后默认更新原查询，也可「另存为新查询」；删除配置不影响执行记录或后台任务。
+
+配置长期保存在 PostgreSQL，按 Haze 会员编号隔离，同账号跨设备可用。相对日期保留预设，执行时重新计算；固定日期不变，快照仍自动读取最新有效分区。保存和加载校验不访问 MaxCompute。语义更新后提示当前口径，失效字段和条件需明确修正后再使用。
+
+部署迁移 `20261010080000_saved_data_queries` 后运行 `pnpm db:generate`，构建数据库与 API 并重启 API。迁移历史正常时使用 `pnpm --filter @eureka-atlas/database run deploy`（必须带 `run`，避免触发 pnpm 内置 deploy 命令）。若存在历史迁移差异，应核对数据库后只应用本次新增迁移，不能重置或删除历史数据。接口为 `/api/saved-data-queries` 的本人配置 CRUD；刷新通过 `savedQueryId` 恢复配置，已有 `queryId` 继续恢复执行快照。
+
+测试：构建 API 后运行 `pnpm --filter @eureka-atlas/api exec node --test test/saved-data-query.test.js` 和 `pnpm --filter @eureka-atlas/web test:unit`。页面与真实账号流程手动验收，不需要浏览器自动检查。
+
 数据查询入口为 `/query/data`，明细默认、可切换汇总。最多保存 200,000 行（SQL 读取 200,001 行判定截断），提交到完整读取共计 10 分钟，成功结果保留 24 小时。智能问数仍限制 5,000 行。
+
+从第二个可选业务条件开始，每行可选择 AND / OR 连接前面的条件，默认 AND；请求将连接符保存在各筛选条件的 `logic` 中。混用时遵循 SQL 的 AND 优先于 OR，例如 `A OR B AND C` 表示 `A OR (B AND C)`。必填日期和最新快照范围始终与整组业务条件共同生效，一个日期区间的上下界始终作为整体，候选值搜索关键词也始终缩小结果范围。删除条件后保留其余行的连接符，首个业务条件不使用连接符。不提供用户自定义括号嵌套。关系会随查询请求保存，刷新恢复和 Excel 查询说明使用同一请求。
+
+日期预设（昨日、近 7／30／N 天）在每次提交新查询时，由后端按 Asia/Shanghai 解析为截至昨日的实际日期，并按已发布日期格式写入查询及候选值 SQL；自定义区间直接使用选择的日期。DATETIME 区间包含结束日期整天，使用次日零点作为排除的上界。SQL 保持单条 SELECT，不生成动态日期函数或 SET 语句。查询记录及 Excel 保存本次实际日期，复制 SQL 后日期保持固定；需要更新日期时请重新生成查询，历史结果不会自动刷新。
 
 API 机器需 Python 3.11+，安装固定读取依赖：
 

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { DataQueryExecution, DataQueryFilter, DataQueryMode, DataQueryRequest, DataQueryResultPage, SemanticPackage, SemanticSelectableTablesResponse } from "@eureka-atlas/types";
-import { ArrowDownWideNarrow, ChevronDown, ChevronRight, CircleAlert, CircleHelp, Clock3, Code2, Database, Download, Info, ListFilter, LoaderCircle, Play, RotateCcw, Search, TableProperties, X } from "lucide-react";
+import type { DataQueryExecution, DataQueryFilter, DataQueryMode, DataQueryRequest, DataQueryResultPage, SavedDataQuery, SavedDataQueryConfig, SavedDataQueryDetail, SemanticPackage, SemanticSelectableTablesResponse } from "@eureka-atlas/types";
+import { ArrowDownWideNarrow, ChevronDown, ChevronRight, CircleAlert, CircleHelp, Clock3, Code2, Database, Download, FolderOpen, Info, ListFilter, LoaderCircle, Play, RotateCcw, Save, Search, TableProperties, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/common/empty-state";
@@ -18,11 +18,15 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { DatasetSelector } from "./dataset-selector";
 import { QueryFilters } from "./query-filters";
-import { defaultFilters, outputFields } from "./model";
+import { configErrors, configKey, defaultFilters, outputFields } from "./model";
+import { SaveQueryDialog } from "./save-query-dialog";
+import { SavedQueriesSheet } from "./saved-queries-sheet";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const isTerminal = (status:string) => ["SUCCEEDED","FAILED","CANCELLED","TIMED_OUT"].includes(status);
 const statusName:Record<string,string> = {PENDING:"提交中",RUNNING:"执行／完整读取中",SUCCEEDED:"已完成",FAILED:"失败",CANCELLING:"取消中",CANCELLED:"已取消",TIMED_OUT:"已超时"};
 const setQueryUrl = (id?:string) => {const url=new URL(window.location.href);if(id)url.searchParams.set("queryId",id);else url.searchParams.delete("queryId");window.history.replaceState(null,"",url);};
+const setSavedUrl = (id?: string) => { const url = new URL(window.location.href); if (id) url.searchParams.set("savedQueryId", id); else url.searchParams.delete("savedQueryId"); window.history.replaceState(null, "", url); };
 export function DataQueryWorkbench() {
   const [tables,setTables]=useState<SemanticSelectableTablesResponse>({items:[],groups:[]});
   const [pkg,setPackage]=useState<SemanticPackage|null>(null),[tableId,setTableId]=useState("");
@@ -33,18 +37,43 @@ export function DataQueryWorkbench() {
   const [page,setPage]=useState(1),[size,setSize]=useState(100),[error,setError]=useState(""),[busy,setBusy]=useState(true),[retry,setRetry]=useState(0),[clock,setClock]=useState(()=>Date.now()),[bootKey,setBootKey]=useState(0);
   const scope=useRef(new AbortController());
   const requestKey=useRef<{json:string;key:string}|null>(null);
+  const [saved, setSaved] = useState<SavedDataQuery | null>(null), [baseline, setBaseline] = useState("");
+  const [saveOpen, setSaveOpen] = useState(false), [saveName, setSaveName] = useState(""), [saving, setSaving] = useState(false), [saveError, setSaveError] = useState("");
+  const [sheetOpen, setSheetOpen] = useState(false), [listRefresh, setListRefresh] = useState(0), [confirmOpen, setConfirmOpen] = useState(false);
+  const [loadValidation, setLoadValidation] = useState<{ key: string; errors: string[] } | null>(null);
+  const pendingAction = useRef<(() => void) | null>(null);
+  const config: SavedDataQueryConfig = { table_id: tableId, mode, field_ids: selected, filters, order_by: sortId ? [{ field_id: sortId, direction }] : [] };
+  const currentKey = configKey(config);
+  const dirty = !!tableId && !!baseline && currentKey !== baseline;
+  const errors = pkg ? [...configErrors(pkg, config), ...(loadValidation?.key === currentKey ? loadValidation.errors : [])] : [];
+  const applyConfig = (input: SavedDataQueryConfig) => { setTableId(input.table_id); setMode(input.mode); setSelected(input.field_ids); setFilters(input.filters ?? []); setSortId(input.order_by?.[0]?.field_id ?? ""); setDirection(input.order_by?.[0]?.direction ?? "DESC"); };
   useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),1000);return ()=>clearInterval(timer);},[]);
   useEffect(()=>{
     const controller=new AbortController();scope.current=controller;
     void (async()=>{
       try {
         const list=await api<SemanticSelectableTablesResponse>("/semantic/queryable-tables",{signal:controller.signal});setTables(list);
-        const id=new URL(window.location.href).searchParams.get("queryId");
+        controller.signal.throwIfAborted();
+        const params = new URL(window.location.href).searchParams;
+        const id=params.get("queryId"), savedId=params.get("savedQueryId");
+        let stored: SavedDataQueryDetail | null = null;
+        if (savedId) {
+          try { stored = await api<SavedDataQueryDetail>("/saved-data-queries/" + encodeURIComponent(savedId), { signal: controller.signal }); }
+          catch (cause) { if (!id || (cause as { status?: number }).status !== 404) throw cause; setSavedUrl(); }
+          controller.signal.throwIfAborted();
+          if (stored) { setSaved(stored); setBaseline(configKey(stored.config)); }
+        }
         if(id) {
           const task=await api<DataQueryExecution>("/data-queries/"+encodeURIComponent(id),{signal:controller.signal});
           const semantic=await api<SemanticPackage>("/packages/"+task.table_id,{signal:controller.signal});
           controller.signal.throwIfAborted();
-          setTableId(task.table_id);setPackage(semantic);setMode(task.request.mode);setSelected(task.request.field_ids);setFilters(task.request.filters ?? []);setSortId(task.request.order_by?.[0]?.field_id ?? "");setDirection(task.request.order_by?.[0]?.direction ?? "DESC");setExecution(task);
+          applyConfig(task.request);setPackage(semantic);setExecution(task);
+          if (!stored) setBaseline(configKey(task.request));
+          if (stored && configKey(task.request) === configKey(stored.config)) setLoadValidation({ key: configKey(stored.config), errors: stored.validation_errors });
+        } else if (stored) {
+          applyConfig(stored.config); setLoadValidation({ key: configKey(stored.config), errors: stored.validation_errors });
+          const semantic = await api<SemanticPackage>("/packages/" + stored.config.table_id, { signal: controller.signal });
+          controller.signal.throwIfAborted(); setPackage(semantic);
         }
       }catch(cause){if(!controller.signal.aborted)setError(cause instanceof Error ? cause.message : "加载失败");}
       finally{if(!controller.signal.aborted)setBusy(false);}
@@ -54,21 +83,47 @@ export function DataQueryWorkbench() {
   useEffect(()=>{
     if(!execution || isTerminal(execution.status))return;
     const controller=new AbortController();
-    const timer=setTimeout(()=>void api<DataQueryExecution>("/data-queries/"+execution.id,{signal:AbortSignal.any([controller.signal,scope.current.signal])}).then(setExecution).catch(cause=>{if(!controller.signal.aborted)setError(cause.message);}),1500);
+    const signal = AbortSignal.any([controller.signal,scope.current.signal]);
+    const timer=setTimeout(()=>void api<DataQueryExecution>("/data-queries/"+execution.id,{signal}).then(task => { if (!signal.aborted) setExecution(task); }).catch(cause=>{if(!signal.aborted)setError(cause.message);}),1500);
     return ()=>{controller.abort();clearTimeout(timer);};
   },[execution,retry]);
   useEffect(()=>{
     if(execution?.status!=="SUCCEEDED" || new Date(execution.expires_at).getTime()<=Date.now())return;
     const controller=new AbortController();
-    void api<DataQueryResultPage>("/data-queries/"+execution.id+"/result?page="+page+"&pageSize="+size,{signal:AbortSignal.any([controller.signal,scope.current.signal])}).then(setData).catch(cause=>{if(!controller.signal.aborted)setError(cause.message);});
+    const signal = AbortSignal.any([controller.signal,scope.current.signal]);
+    void api<DataQueryResultPage>("/data-queries/"+execution.id+"/result?page="+page+"&pageSize="+size,{signal}).then(result => { if (!signal.aborted) setData(result); }).catch(cause=>{if(!signal.aborted)setError(cause.message);});
     return ()=>controller.abort();
   },[execution,page,size,retry]);
   const chooseTable=async(id:string)=>{
     scope.current.abort();const controller=new AbortController();scope.current=controller;
-    setTableId(id);setPackage(null);setSelected([]);setFilters([]);setSortId("");setMode("DETAIL");setExecution(null);setData(null);setPage(1);setSearch("");setError("");setBusy(true);requestKey.current=null;setQueryUrl();
-    try{const semantic=await api<SemanticPackage>("/packages/"+id,{signal:controller.signal});controller.signal.throwIfAborted();setPackage(semantic);setFilters(defaultFilters(semantic));}
+    setTableId(id);setPackage(null);setSelected([]);setFilters([]);setSortId("");setMode("DETAIL");setExecution(null);setData(null);setPage(1);setSearch("");setError("");setBusy(!!id);requestKey.current=null;setQueryUrl();setSavedUrl();setSaved(null);setBaseline("");setLoadValidation(null);
+    if (!id) return;
+    try{const semantic=await api<SemanticPackage>("/packages/"+id,{signal:controller.signal});controller.signal.throwIfAborted();setPackage(semantic);setFilters(defaultFilters(semantic));setBaseline(configKey({ table_id: id, mode: "DETAIL", field_ids: [], filters: defaultFilters(semantic), order_by: [] }));}
     catch(cause){if(!controller.signal.aborted)setError(cause instanceof Error ? cause.message : "加载失败");}
     finally{if(!controller.signal.aborted)setBusy(false);}
+  };
+  const openSaved = async (id: string) => {
+    scope.current.abort(); const controller = new AbortController(); scope.current = controller;
+    setPackage(null); setSaved(null); setTableId(""); setSelected([]); setFilters([]); setSortId(""); setExecution(null); setData(null); setPage(1); setSearch(""); setError(""); setBusy(true); setBaseline(""); setLoadValidation(null); requestKey.current = null; setQueryUrl(); setSavedUrl(id);
+    try {
+      const stored = await api<SavedDataQueryDetail>("/saved-data-queries/" + encodeURIComponent(id), { signal: controller.signal });
+      controller.signal.throwIfAborted(); applyConfig(stored.config); setSaved(stored); setBaseline(configKey(stored.config)); setLoadValidation({ key: configKey(stored.config), errors: stored.validation_errors });
+      const semantic = await api<SemanticPackage>("/packages/" + stored.config.table_id, { signal: controller.signal });
+      controller.signal.throwIfAborted(); setPackage(semantic);
+    } catch (cause) { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "配置加载失败"); }
+    finally { if (!controller.signal.aborted) setBusy(false); }
+  };
+  const navigate = (action: () => void) => { if (dirty) { pendingAction.current = action; setConfirmOpen(true); } else action(); };
+  const openSave = () => { setSaveName(saved?.name ?? ""); setSaveError(""); setSaveOpen(true); };
+  const save = async (asNew: boolean) => {
+    if (!pkg || errors.length || saving) return;
+    setSaving(true); setSaveError(""); const controller = scope.current;
+    try {
+      const result = await api<SavedDataQuery>(saved && !asNew ? "/saved-data-queries/" + saved.id : "/saved-data-queries", { method: saved && !asNew ? "PATCH" : "POST", body: JSON.stringify({ name: saveName, config }), signal: controller.signal });
+      controller.signal.throwIfAborted(); setSaved(result); setBaseline(configKey(result.config)); setSavedUrl(result.id); setLoadValidation(null); setSaveOpen(false); setListRefresh(value => value + 1);
+      setSaving(false); const action = pendingAction.current; pendingAction.current = null; action?.();
+    } catch (cause) { if (!controller.signal.aborted) setSaveError(cause instanceof Error ? cause.message : "保存失败"); }
+    finally { if (!controller.signal.aborted) setSaving(false); }
   };
   const fields=pkg ? outputFields(pkg,mode) : [];
   const toggle=(id:string)=>{const next=selected.includes(id)?selected.filter(item=>item!==id):[...selected,id];setSelected(next);if(sortId===id && !next.includes(id))setSortId("");};
@@ -77,9 +132,9 @@ export function DataQueryWorkbench() {
     setMode(next);setSelected(selected.filter(id=>allowed.has(id)));if(!allowed.has(sortId))setSortId("");
   };
   const submit=async()=>{
-    if(!pkg)return;setBusy(true);setError("");setData(null);setExecution(null);
+    if(!pkg || errors.length)return;setBusy(true);setError("");setData(null);setExecution(null);
     const controller=scope.current;
-    const input:DataQueryRequest={table_id:tableId,mode,field_ids:selected,filters,order_by:sortId?[{field_id:sortId,direction}]:[]};
+    const input:DataQueryRequest=config;
     const json=JSON.stringify(input);if(requestKey.current?.json!==json)requestKey.current={json,key:crypto.randomUUID()};
     try{const task=await api<DataQueryExecution>("/data-queries",{method:"POST",body:JSON.stringify({...input,idempotency_key:requestKey.current!.key}),signal:controller.signal});controller.signal.throwIfAborted();setExecution(task);setPage(1);setQueryUrl(task.id);requestKey.current=null;}
     catch(cause){if(!controller.signal.aborted)setError(cause instanceof Error ? cause.message : "查询失败");}
@@ -87,18 +142,20 @@ export function DataQueryWorkbench() {
   };
   const cancel=async()=>{
     if(!execution)return;
-    try{const task=await api<DataQueryExecution>("/data-queries/"+execution.id+"/cancel",{method:"POST",signal:scope.current.signal});setExecution(task);}
-    catch(cause){if(!scope.current.signal.aborted)setError(cause instanceof Error ? cause.message : "取消失败");}
+    const controller = scope.current;
+    try{const task=await api<DataQueryExecution>("/data-queries/"+execution.id+"/cancel",{method:"POST",signal:controller.signal});controller.signal.throwIfAborted();setExecution(task);}
+    catch(cause){if(!controller.signal.aborted)setError(cause instanceof Error ? cause.message : "取消失败");}
   };
   const running=execution && !isTerminal(execution.status);
   const expired=execution && new Date(execution.expires_at).getTime()<=clock;
-  const canRun=pkg?.source.type==="MAXCOMPUTE" && selected.length && (mode==="DETAIL" || selected.some(id=>pkg.fields.find(field=>field.id===id)?.type==="METRIC" || pkg.metrics.some(metric=>metric.id===id)));
+  const canRun=pkg?.source.type==="MAXCOMPUTE" && selected.length && !errors.length;
   const matchingFields = fields.filter(field => [field.name, field.column].some(text => text.toLowerCase().includes(search.trim().toLowerCase())));
   const modeLabel = mode === "DETAIL" ? "明细查询" : "汇总查询";
+  const toolbar = <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5"><h2 className="flex min-w-0 flex-wrap items-center gap-2 text-sm font-semibold text-slate-800"><ListFilter className="size-4" />查询配置{saved && <span className="max-w-64 truncate font-normal text-slate-500" title={saved.name}>{saved.name}</span>}{dirty && <Badge className="bg-amber-50 text-amber-700">未保存修改</Badge>}</h2><div className="flex items-center gap-2"><Button variant="ghost" size="sm" disabled={busy || saving} onClick={() => navigate(() => void chooseTable(tableId))}><RotateCcw className="size-3.5" />新建查询</Button><Button variant="outline" size="sm" disabled={!canRun || busy || saving} onClick={openSave}><Save className="size-3.5" />保存查询</Button><Button variant="outline" size="sm" onClick={() => setSheetOpen(true)}><FolderOpen className="size-3.5" />我的查询</Button></div></div>;
   return <div className="flex min-h-[calc(100dvh-110px)] flex-col gap-4 lg:h-[calc(100dvh-110px)] lg:min-h-0">
     {error && <Alert variant="destructive" className="shrink-0"><CircleAlert /><AlertDescription>{error}</AlertDescription><AlertAction>
-      <Button variant="outline" size="sm" onClick={()=>{setError("");setRetry(retry+1);if(!pkg && tableId)void chooseTable(tableId);else if(!pkg)setBootKey(bootKey+1);}}>重试</Button>
-      {!pkg && <Button variant="ghost" size="sm" onClick={()=>{setQueryUrl();setError("");}}>返回本人数据查询</Button>}
+      <Button variant="outline" size="sm" onClick={()=>{setError("");setRetry(retry+1);if(!pkg && saved)void openSaved(saved.id);else if(!pkg)setBootKey(bootKey+1);}}>重试</Button>
+      {!pkg && <Button variant="ghost" size="sm" onClick={() => navigate(() => void chooseTable(""))}>返回本人数据查询</Button>}
     </AlertAction></Alert>}
     <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
       <Card className="flex min-h-0 flex-col overflow-hidden rounded-xl shadow-none">
@@ -112,7 +169,7 @@ export function DataQueryWorkbench() {
                 <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-xs" aria-label="查询模式说明" className="text-slate-400 hover:text-slate-700"><CircleHelp className="size-3.5" /></Button></TooltipTrigger><TooltipContent side="right" className="max-w-xs">{mode==="DETAIL" ? "明细查询：返回原始数据，不聚合、不去重。" : "汇总查询：按治理指标口径与计算公式汇总。"}</TooltipContent></Tooltip></TooltipProvider>
               </div>
             </div>
-            <DatasetSelector tables={tables} value={tableId} onChange={id=>void chooseTable(id)} />
+            <DatasetSelector tables={tables} value={tableId} onChange={id=>navigate(() => void chooseTable(id))} />
           </div>
           {pkg ? <>
             <div className="shrink-0 px-4 pt-4">
@@ -120,6 +177,7 @@ export function DataQueryWorkbench() {
               <InputGroup className="h-9 border-slate-200 shadow-none"><InputGroupAddon><Search /></InputGroupAddon><InputGroupInput className="h-full pl-9" aria-label="搜索输出字段" value={search} onChange={event=>setSearch(event.target.value)} placeholder="搜索字段名称或物理字段" /></InputGroup>
             </div>
             <div className="shadcn-scrollbar max-h-96 min-h-0 flex-1 overflow-y-auto px-3 py-3 lg:max-h-none">
+              {selected.filter(id => !fields.some(field => field.id === id && !field.disabled)).map(id => <div key={id} className="mb-2 flex items-center gap-2 rounded-md border border-rose-200 px-2 py-1 text-xs text-rose-600"><span className="min-w-0 flex-1">{fields.find(field => field.id === id)?.name ?? id} · 已失效或不适用</span><Button variant="ghost" size="icon-xs" aria-label={`移除失效字段 ${id}`} onClick={() => toggle(id)}><X className="size-3" /></Button></div>)}
               {[["METRIC","指标"],["DIMENSION","维度"],["LABEL","标签"],["PARTITION","分区"]].map(([group,label])=>{
                 const visible=matchingFields.filter(field=>field.group===group);
                 if (!visible.length) return null;
@@ -144,14 +202,13 @@ export function DataQueryWorkbench() {
       </Card>
       <section aria-label="查询工作台" className="shadcn-scrollbar flex min-h-0 min-w-0 flex-col gap-4 lg:overflow-y-auto">
         {!pkg ? <Card className="flex min-h-96 flex-1 flex-col rounded-xl shadow-none">
-          <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4 text-sm font-semibold text-slate-800"><TableProperties className="size-4 text-slate-400" />查询工作台</div>
+          {toolbar}
           <EmptyState icon={Database} title={busy ? "正在准备数据集" : "选择一个数据集，开始查询"} description="从左侧选择已发布的数据集，勾选输出字段，设置筛选条件后即可查询。支持明细、汇总及 Excel 导出。" />
         </Card> : <>
           <Card className="shrink-0 rounded-xl shadow-none">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3.5">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><ListFilter className="size-4 text-slate-400" />查询配置</h2>
-              <Button variant="ghost" size="sm" className="text-slate-500" disabled={busy || !!running} onClick={()=>void chooseTable(tableId)}><RotateCcw className="size-3.5" />新建查询</Button>
-            </div>
+            {toolbar}
+            {saved && saved.content_version !== pkg.content_version && <p className="flex items-center gap-2 px-5 pt-3 text-xs text-amber-700"><Info className="size-4 shrink-0" />正式语义已更新，执行和保存将使用当前口径。</p>}
+            {errors.length > 0 && <div className="space-y-1 px-5 pt-3 text-xs text-rose-600" role="status">{[...new Set(errors)].map(message => <p key={message}>{message}</p>)}</div>}
             <div className="px-5 py-4">
               <QueryFilters key={tableId} pkg={pkg} filters={filters} onChange={setFilters} />
             </div>
@@ -178,7 +235,7 @@ export function DataQueryWorkbench() {
                   <span className="max-w-xs truncate text-slate-400" title={`语义版本 ${execution.content_version}`}>语义版本 {execution.content_version}</span>
                   <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-right tabular-nums">
                     {execution.snapshot_date && <span className="whitespace-nowrap">快照日期 {execution.snapshot_date}</span>}
-                    {execution.resolved_dates.map(range=><span key={range.field_id} className="whitespace-nowrap">实际日期：{range.start} 至 {range.end}（Asia/Shanghai）</span>)}
+                    {execution.resolved_dates.map((range,index)=><span key={range.field_id+":"+index} className="whitespace-nowrap">实际日期：{range.start} 至 {range.end}（Asia/Shanghai）</span>)}
                   </div>
                 </div>
                 {execution.error && <p className="text-rose-600">{execution.error}</p>}
@@ -201,5 +258,8 @@ export function DataQueryWorkbench() {
         </>}
       </section>
     </div>
+    <SaveQueryDialog open={saveOpen} onOpenChange={value => { setSaveOpen(value); if (!value) pendingAction.current = null; }} name={saveName} onNameChange={setSaveName} existing={!!saved} saving={saving} error={saveError} onSave={asNew => void save(asNew)} />
+    <SavedQueriesSheet open={sheetOpen} onOpenChange={setSheetOpen} refresh={listRefresh} currentId={saved?.id} onSelect={id => navigate(() => void openSaved(id))} onDeleted={id => { if (saved?.id === id) { setSaved(null); setSavedUrl(); setBaseline(configKey({ table_id: tableId, mode: "DETAIL", field_ids: [], filters: pkg ? defaultFilters(pkg) : [], order_by: [] })); } }} />
+    <Dialog open={confirmOpen} onOpenChange={value => { setConfirmOpen(value); if (!value) pendingAction.current = null; }}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>当前配置有未保存修改</DialogTitle><DialogDescription>是否保存当前查询配置后继续？后台任务不会被取消。</DialogDescription></DialogHeader><DialogFooter className="flex-wrap"><Button variant="outline" onClick={() => { pendingAction.current = null; setConfirmOpen(false); }}>取消</Button><Button variant="outline" onClick={() => { const action = pendingAction.current; pendingAction.current = null; setConfirmOpen(false); action?.(); }}>放弃修改</Button><Button disabled={!canRun || busy} onClick={() => { setConfirmOpen(false); openSave(); }}>保存后继续</Button></DialogFooter></DialogContent></Dialog>
   </div>;
 }

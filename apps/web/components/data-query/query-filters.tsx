@@ -1,11 +1,13 @@
 "use client";
 
-import type { DataDateFilter, DataQueryFilter, QueryFilterOperator, SemanticPackage } from "@eureka-atlas/types";
-import { Info, Plus, X } from "lucide-react";
+import type { DataDateFilter, DataQueryFilter, DataQueryFilterLogic, QueryFilterOperator, SemanticPackage } from "@eureka-atlas/types";
+import { CircleHelp, Info, Plus, X } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CandidateValues } from "./candidate-values";
 import { DateRangePicker } from "./date-range-picker";
 import { dateField, previewDate } from "./model";
@@ -19,31 +21,40 @@ export function QueryFilters({ pkg, filters, onChange }: { pkg: SemanticPackage;
   const available = pkg.fields.filter(field => !(config.storage === "FULL_SNAPSHOT" && field.id === config.default_stat_date.field_id));
   const requiredDateId = config.storage === "DATE_INCREMENTAL" ? config.default_stat_date.field_id : null;
   const requiredDateIndex = filters.findIndex(filter => filter.field_id === requiredDateId);
+  const firstOptionalIndex = filters.findIndex((_, index) => index !== requiredDateIndex);
   const fieldGroups = ([["METRIC", "指标"], ["DIMENSION", "维度"], ["LABEL", "标签"], ["PARTITION", "分区"]] as const)
     .map(([type, label]) => ({ label, options: available.filter(field => field.type === type).map(field => ({ value: field.id, label: field.name, disabled: field.id === requiredDateId })) }))
     .filter(group => group.options.length);
   const fieldOptions = fieldGroups.flatMap(group => group.options);
   const optionalFields = available.filter(field => field.id !== requiredDateId);
   const nextField = optionalFields.find(field => !filters.some(filter => filter.field_id === field.id)) ?? optionalFields[0];
-  const replace = (index: number, value: DataQueryFilter) => onChange(filters.map((item, i) => i === index ? value : item));
+  const replace = (index: number, value: DataQueryFilter) => onChange(filters.map((item, i) => i === index ? { ...(item.logic !== undefined ? { logic: item.logic } : {}), ...value } : item));
   const initial = (id: string): DataQueryFilter => dateField(pkg, id) ? { field_id: id, preset: "YESTERDAY" } : { field_id: id, operator: "EQ", values: [] };
 
   return <div className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="flex items-center gap-2"><h3 className="text-xs font-medium text-slate-600">筛选条件</h3><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">AND</span><span className="text-xs text-slate-400">聚合前生效</span></div>
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="text-xs font-medium text-slate-600">筛选条件</h3>
+        <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon-xs" aria-label="条件关系说明" className="text-slate-400"><CircleHelp className="size-3.5" /></Button></TooltipTrigger><TooltipContent className="max-w-xs">每行的 AND / OR 连接前面的业务条件，AND 优先于 OR。例如 A OR B AND C 表示 A OR (B AND C)。必填日期和最新快照范围始终生效，候选值搜索关键词也始终生效。</TooltipContent></Tooltip></TooltipProvider>
+        <span className="text-xs text-slate-400">聚合前生效</span>
+      </div>
       <Button variant="outline" size="sm" disabled={!nextField || filters.length >= 100} onClick={() => { if (nextField) onChange([...filters, initial(nextField.id)]); }}><Plus className="size-3.5" />添加条件</Button>
     </div>
     {config.storage === "FULL_SNAPSHOT" && <p className="flex items-center gap-1.5 text-xs leading-5 text-slate-400"><Info className="size-3.5 shrink-0" />自动读取最新快照，快照日期不可手动筛选。</p>}
+    {requiredDateId && requiredDateIndex < 0 && available.some(field => field.id === requiredDateId) && <Button variant="outline" size="sm" onClick={() => onChange([initial(requiredDateId), ...filters])}>补充必填统计日期</Button>}
+    <ScrollArea type="auto" scrollbars="vertical" className="h-[140px]" role="region" aria-label="筛选条件列表">
+      <div className="space-y-3 p-0.5 pr-3">
     {!filters.length && <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 px-4 py-5 text-center text-xs text-slate-400">尚未添加筛选条件，可按日期、维度或指标缩小查询范围。</div>}
     {filters.map((filter, index) => {
       const field = pkg.fields.find(item => item.id === filter.field_id);
-      if (!field) return null;
+      if (!field) return <div key={index} className="flex items-center gap-2 rounded-lg border border-rose-200 p-3 text-xs text-rose-600"><span className="min-w-0 flex-1">筛选字段 {filter.field_id} 已失效，请更换或删除。</span><Combobox aria-label={`筛选字段 ${index + 1}`} className="w-44" value={filter.field_id} options={fieldOptions} groups={fieldGroups} onValueChange={id => replace(index, initial(id))} /><Button aria-label="删除筛选" variant="ghost" size="icon-sm" onClick={() => onChange(filters.filter((_, i) => i !== index))}><X className="size-4" /></Button></div>;
       const required = index === requiredDateIndex;
       const isDate = "preset" in filter;
       const candidate = field.type === "DIMENSION" || field.type === "LABEL";
       const operators: QueryFilterOperator[] = ["EQ", "NEQ", "IN", "IS_NULL", "IS_NOT_NULL", ...(["INTEGER", "DECIMAL", "DATE", "DATETIME"].includes(field.normalized_type) ? ["GT", "GTE", "LT", "LTE", "BETWEEN"] as QueryFilterOperator[] : []), ...(field.normalized_type === "STRING" ? ["CONTAINS"] as QueryFilterOperator[] : [])];
       return <div key={index} className="rounded-lg border border-slate-200/80 bg-slate-50/40 p-3">
         <div className="flex flex-wrap items-center gap-2">
+          {required || index === firstOptionalIndex ? <span className="inline-flex h-9 w-20 shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs text-slate-500" title={required ? "必填日期独立生效，不参与 OR" : "首个业务条件不需要连接符"}>{required ? "必填" : "起始"}</span> : <Combobox aria-label={`条件关系 ${index + 1}`} className="h-9 w-20 shrink-0" inputClassName={selectStyle} searchable={false} value={filter.logic ?? "AND"} options={[{ value: "AND", label: "AND" }, { value: "OR", label: "OR" }]} onValueChange={value => replace(index, { ...filter, logic: value as DataQueryFilterLogic })} />}
           <Combobox aria-label={`筛选字段 ${index + 1}`} className="h-9 w-full sm:w-44" inputClassName="h-9 border-slate-200 shadow-none" value={filter.field_id} disabled={required} options={fieldOptions} groups={fieldGroups} onValueChange={id => replace(index, initial(id))} />
           {isDate ? <>
             <Combobox aria-label={field.name + "日期范围"} className="h-9 w-36" inputClassName={selectStyle} searchable={false} value={filter.preset} options={presets} onValueChange={value => replace(index, { field_id: field.id, preset: value as DataDateFilter["preset"], days: filter.days ?? 7, start: filter.start, end: filter.end })} />
@@ -62,5 +73,7 @@ export function QueryFilters({ pkg, filters, onChange }: { pkg: SemanticPackage;
         {!isDate && dateField(pkg, field.id) && <Button className="mt-2 h-6 px-0 text-xs text-slate-500 hover:bg-transparent" variant="ghost" size="sm" onClick={() => replace(index, initial(field.id))}>使用日期预设</Button>}
       </div>;
     })}
+      </div>
+    </ScrollArea>
   </div>;
 }

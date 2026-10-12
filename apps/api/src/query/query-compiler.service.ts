@@ -1,11 +1,11 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { normalizeDataFilters, shiftDay } from "./data-query-dates";
+import { normalizeDataFilters, shiftDay, type DataFilterGroup } from "./data-query-dates";
 import { Parser } from "node-sql-parser";
-import type { DataQueryRequest, DimensionValuesRequest, QueryFilter, QueryRequest, SemanticPackage } from "@eureka-atlas/types" with { "resolution-mode": "import" };
+import type { DataDimensionValuesRequest, DataQueryRequest, DimensionValuesRequest, QueryFilter, QueryRequest, SemanticPackage } from "@eureka-atlas/types" with { "resolution-mode": "import" };
 
 type Output = { id: string; name: string; type: string; unit: string | null };
 export type CompiledQuery = { sql: string; outputs: Output[]; snapshotDate: string | null; limit: number };
-type CompileOptions = { snapshotDate?: string | null; maxRows?: number; completeDays?: boolean; candidateSearch?: boolean };
+type CompileOptions = { snapshotDate?: string | null; maxRows?: number; completeDays?: boolean; candidateSearch?: boolean; filterGroups?: DataFilterGroup[]; configOnly?: boolean };
 
 const aggregations = new Set(["SUM", "COUNT", "COUNT_DISTINCT", "AVG", "MIN", "MAX"]);
 const dateFormats = new Set(["yyyyMMdd", "yyyy-MM-dd", "yyyy/MM/dd"]);
@@ -67,7 +67,7 @@ export class QueryCompilerService {
       const alias = addOutput({ id, name: metric.name, type: "DECIMAL", unit: metric.unit });
       selections.push(`(${metric.formula}) AS ${quote(alias)}`);
     }
-    const { where } = this.where(pkg, fields, asArray(input.filters), input.date_range, options.snapshotDate, options.completeDays);
+    const { where } = this.where(pkg, fields, asArray(input.filters), input.date_range, options.snapshotDate, options.completeDays, options.filterGroups, options.configOnly);
     const snapshotField = pkg.table.query_config.storage === "FULL_SNAPSHOT" && pkg.table.query_config.default_stat_date.field_id ? fields.get(pkg.table.query_config.default_stat_date.field_id) : undefined;
     if (snapshotField) selections.push(`MAX(${quote(snapshotField.column)}) AS ${quote("__snapshot_date")}`);
     const table = `${quote(pkg.source.project)}.${quote(pkg.table.name)}`;
@@ -92,6 +92,11 @@ export class QueryCompilerService {
   }
 
 
+  validateDataQuery(pkg: SemanticPackage, input: DataQueryRequest): void {
+    // Same execution rules, without resolving or inventing a cloud snapshot.
+    this.compileDataQuery(pkg, input, { configOnly: true });
+  }
+
   compileDataQuery(pkg: SemanticPackage, input: DataQueryRequest, options: CompileOptions = {}) {
     if (input.table_id !== pkg.table.id || !["DETAIL", "AGGREGATE"].includes(input.mode)) throw new BadRequestException("查询必须使用当前单表及有效查询模式");
     if (!Array.isArray(input.field_ids) || !input.field_ids.length || input.field_ids.some(id => typeof id !== "string") || new Set(input.field_ids).size !== input.field_ids.length) throw new BadRequestException("请至少选择一个有效字段，字段不能重复");
@@ -102,7 +107,7 @@ export class QueryCompilerService {
     for (const id of input.field_ids) if (!fields.has(id) && !derived.has(id)) throw new BadRequestException("输出字段不属于当前表");
     let compiled: CompiledQuery;
     if (input.mode === "AGGREGATE") {
-      compiled = this.compileQuery(pkg, { table_id:input.table_id, metric_ids:input.field_ids.filter(id => fields.get(id)?.type === "METRIC" || derived.has(id)), dimension_ids:input.field_ids.filter(id => fields.has(id) && fields.get(id)!.type !== "METRIC"), filters:normalized.filters,date_range:normalized.dateRange,order_by:input.order_by,limit:200000 }, {...options,maxRows:200000,completeDays:true});
+      compiled = this.compileQuery(pkg, { table_id:input.table_id, metric_ids:input.field_ids.filter(id => fields.get(id)?.type === "METRIC" || derived.has(id)), dimension_ids:input.field_ids.filter(id => fields.has(id) && fields.get(id)!.type !== "METRIC"), filters:normalized.filters,date_range:normalized.dateRange,order_by:input.order_by,limit:200000 }, {...options,maxRows:200000,completeDays:true,filterGroups:normalized.groups});
     } else {
       const selected = input.field_ids.map(id => {
         const field = fields.get(id);
@@ -115,7 +120,7 @@ export class QueryCompilerService {
         const alias = readableAlias(field.name,used); aliases.set(field.id,alias);
         return quote(field.column)+" AS "+quote(alias);
       });
-      const {where} = this.where(pkg,fields,normalized.filters,normalized.dateRange,options.snapshotDate,true);
+      const {where} = this.where(pkg,fields,normalized.filters,normalized.dateRange,options.snapshotDate,true,normalized.groups,options.configOnly);
       if (input.order_by !== undefined && (!Array.isArray(input.order_by) || input.order_by.length > 100)) throw new BadRequestException("排序无效");
       const order = (input.order_by ?? []).map(item => {
         if (!aliases.has(item.field_id) || !["ASC","DESC"].includes(item.direction)) throw new BadRequestException("排序必须使用已选输出字段");
@@ -126,16 +131,22 @@ export class QueryCompilerService {
     return {...compiled,resolvedDates:normalized.resolvedDates};
   }
 
+  compileDataDimensionValues(pkg: SemanticPackage, input: DataDimensionValuesRequest, options: CompileOptions = {}): CompiledQuery {
+    const normalized = normalizeDataFilters(pkg, input.filters);
+    return this.compileDimensionValues(pkg, { table_id: input.table_id, field_id: input.field_id, keyword: input.keyword, filters: normalized.filters, date_range: normalized.dateRange, limit: 200 }, { ...options, completeDays: true, candidateSearch: true, filterGroups: normalized.groups });
+  }
+
   compileDimensionValues(pkg: SemanticPackage, input: DimensionValuesRequest, options: CompileOptions = {}): CompiledQuery {
     const fields = new Map(pkg.fields.map((field) => [field.id, field]));
     const field = fields.get(input.field_id);
     if (!field || !field.candidate_value_queryable || (field.type !== "DIMENSION" && field.type !== "LABEL")) throw new BadRequestException("该字段未开放候选值查询");
     const limit = input.limit ?? 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new BadRequestException("候选值数量必须介于 1 到 200");
-    const filters = [...asArray(input.filters)];
-    const keywordCondition = text(input.keyword) && options.candidateSearch && field.normalized_type !== "STRING" ? `CAST(${quote(field.column)} AS STRING) LIKE ${sqlString("%"+text(input.keyword).replace(/[\\%_]/g,"\\$&")+"%")}` : "";
-    if (text(input.keyword) && !keywordCondition) filters.push({ field_id: field.id, operator: "CONTAINS", values: [text(input.keyword)] });
-    const { where: baseWhere } = this.where(pkg, fields, filters, input.date_range, options.snapshotDate, options.completeDays);
+    const keywordCondition = text(input.keyword) ? options.candidateSearch && field.normalized_type !== "STRING"
+      ? `CAST(${quote(field.column)} AS STRING) LIKE ${sqlString("%"+text(input.keyword).replace(/[\\%_]/g,"\\$&")+"%")}`
+      : this.filter(field, { field_id: field.id, operator: "CONTAINS", values: [text(input.keyword)] }) : "";
+    const { where: baseWhere } = this.where(pkg, fields, asArray(input.filters), input.date_range, options.snapshotDate, options.completeDays, options.filterGroups);
+    // The search keyword always narrows candidates; it must not join the business OR group.
     const where = [baseWhere,keywordCondition].filter(Boolean).join(" AND ");
     const snapshotField = pkg.table.query_config.storage === "FULL_SNAPSHOT" && pkg.table.query_config.default_stat_date.field_id ? fields.get(pkg.table.query_config.default_stat_date.field_id) : undefined;
     const alias = readableAlias(field.name, new Set());
@@ -154,7 +165,7 @@ export class QueryCompilerService {
     return { sql: clauses.join("\n"), outputs: [{ id: field.id, name: field.name, type: field.normalized_type, unit: null }], snapshotDate: options.snapshotDate ?? null, limit };
   }
 
-  private where(pkg: SemanticPackage, fields: Map<string, SemanticPackage["fields"][number]>, filters: QueryFilter[], dateRange: QueryRequest["date_range"] | DimensionValuesRequest["date_range"], snapshotDate?: string | null, completeDays = false) {
+  private where(pkg: SemanticPackage, fields: Map<string, SemanticPackage["fields"][number]>, filters: QueryFilter[], dateRange: QueryRequest["date_range"] | DimensionValuesRequest["date_range"], snapshotDate?: string | null, completeDays = false, filterGroups?: DataFilterGroup[], configOnly = false) {
     const conditions: string[] = [];
     const config = pkg.table.query_config;
     const defaultDate = config.default_stat_date.field_id ? fields.get(config.default_stat_date.field_id) : undefined;
@@ -162,8 +173,10 @@ export class QueryCompilerService {
       if (!defaultDate?.is_partition) throw new BadRequestException("全量快照表需要把默认统计日期配置为有效分区字段");
       this.assertSupportedDate(defaultDate, config.default_stat_date.format);
       if (dateRange) throw new BadRequestException("全量快照表的默认统计日期用于自动选择最新快照，请使用其他业务日期字段筛选历史范围");
-      if (!snapshotDate) throw new BadRequestException("全量快照表未能确定最新有效分区");
-      conditions.push(`${quote(defaultDate.column)} = ${this.literal(defaultDate.normalized_type, snapshotDate)}`);
+      if (!configOnly) {
+        if (!snapshotDate) throw new BadRequestException("全量快照表未能确定最新有效分区");
+        conditions.push(`${quote(defaultDate.column)} = ${this.literal(defaultDate.normalized_type, snapshotDate)}`);
+      }
     } else if (dateRange) {
       if (!defaultDate) throw new BadRequestException("此表没有配置默认统计日期");
       this.assertSupportedDate(defaultDate, config.default_stat_date.format);
@@ -176,11 +189,18 @@ export class QueryCompilerService {
     } else if (config.storage === "DATE_INCREMENTAL") {
       throw new BadRequestException("日期增量表必须指定日期范围：query_data 和 get_dimension_values 都需传 date_range: { start, end }，日期使用 YYYY-MM-DD 或 YYYYMMDD；日期未知请先澄清。");
     }
-    for (const filter of filters) {
-      const field = fields.get(filter.field_id);
-      if (!field) throw new BadRequestException(`筛选字段 ${filter.field_id} 不存在于当前正式语义`);
-      conditions.push(this.filter(field, filter));
-    }
+    const groups: DataFilterGroup[] = filterGroups ?? filters.map(filter => ({ logic: "AND", filters: [filter] }));
+    const expressions = groups.map((group, index) => {
+      const parts = group.filters.map(filter => {
+        const field = fields.get(filter.field_id);
+        if (!field) throw new BadRequestException(`筛选字段 ${filter.field_id} 不存在于当前正式语义`);
+        return this.filter(field, filter);
+      });
+      const expression = parts.length > 1 ? `(${parts.join(" AND ")})` : parts[0];
+      return index ? `${group.logic} ${expression}` : expression;
+    });
+    // SQL gives AND precedence over OR; wrap the entire business expression to protect date scope.
+    if (expressions.length) conditions.push(`(${expressions.join(" ")})`);
     return { where: conditions.join(" AND ") };
   }
 

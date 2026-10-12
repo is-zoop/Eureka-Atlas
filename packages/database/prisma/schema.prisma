@@ -599,6 +599,20 @@ enum QueryExecutionKind {
   DATA_QUERY
 }
 
+model SavedDataQuery {
+  id             String   @id @default(cuid())
+  ownerMemberNo  String
+  name           String
+  config         Json
+  tableName      String
+  contentVersion String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([ownerMemberNo, updatedAt, id])
+  @@map("saved_data_query")
+}
+
 model QueryResultChunk {
   queryExecutionId String
   chunkIndex Int

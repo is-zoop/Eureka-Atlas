@@ -309,9 +309,14 @@ export interface AuthUser {
 }
 
 export type DataQueryMode = "DETAIL" | "AGGREGATE";
+export type DataQueryFilterLogic = "AND" | "OR";
 export type DataDateFilter = { field_id: string; preset: "YESTERDAY" | "LAST_7_DAYS" | "LAST_30_DAYS" | "LAST_N_DAYS" | "CUSTOM"; days?: number; start?: string; end?: string };
-export type DataQueryFilter = QueryFilter | DataDateFilter;
+export type DataQueryFilter = (QueryFilter | DataDateFilter) & { logic?: DataQueryFilterLogic };
 export type DataQueryRequest = { idempotency_key?: string; table_id: string; mode: DataQueryMode; field_ids: string[]; filters?: DataQueryFilter[]; order_by?: QueryOrder[] };
+export type SavedDataQueryConfig = Omit<DataQueryRequest, "idempotency_key">;
+export type SavedDataQuery = { id: string; name: string; config: SavedDataQueryConfig; table_name: string; content_version: string; created_at: string; updated_at: string };
+export type SavedDataQueryDetail = SavedDataQuery & { current_content_version: string | null; validation_errors: string[] };
+export type SavedDataQueryList = { items: SavedDataQuery[]; page: number; page_size: number; total: number; total_pages: number };
 export type DataDimensionValuesRequest = { idempotency_key?: string; table_id: string; field_id: string; keyword?: string; filters?: DataQueryFilter[] };
 export type DataQueryExecution = Omit<QueryExecution, "result"> & { request: DataQueryRequest; columns: QueryResultColumn[]; row_count: number; truncated: boolean; expires_at: string; resolved_dates: Array<{ field_id: string; start: string; end: string }> };
 export type DataQueryResultPage = { columns: QueryResultColumn[]; rows: QueryResult["rows"]; page: number; page_size: number; total: number; total_pages: number; truncated: boolean };

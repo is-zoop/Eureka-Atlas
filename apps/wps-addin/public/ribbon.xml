@@ -1,0 +1,14 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="AtlasOnLoad">
+  <ribbon startFromScratch="false">
+    <tabs>
+      <tab id="AtlasTab" label="Atlas">
+        <group id="AtlasDataGroup" label="数据助手">
+          <button id="AtlasOpenPane" label="打开助手" size="large" onAction="AtlasOpenPane" getImage="AtlasGetImage" screentip="打开 Atlas 右侧面板" supertip="登录 Atlas，读取我的查询并刷新工作表数据。" />
+          <button id="AtlasUpdateAll" label="全部更新" size="large" onAction="AtlasUpdateAll" getImage="AtlasGetImage" screentip="更新当前工作簿的全部已加载查询" supertip="仅更新当前账号绑定的结果表，逐个读取最新查询配置；不自动保存工作簿。" />
+          <button id="AtlasAbout" label="使用说明" size="large" onAction="AtlasAbout" getImage="AtlasGetImage" screentip="查看查询与刷新说明" />
+          <checkBox id="AtlasOverwrite" label="刷新覆盖" onAction="AtlasSetOverwrite" getPressed="AtlasGetOverwrite" screentip="刷新时不再询问覆盖范围" supertip="勾选后直接覆盖已绑定结果区域；保护、账号与完整性检查仍然保留。" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

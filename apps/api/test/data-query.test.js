@@ -32,6 +32,46 @@ test("data compiler keeps detail raw, aggregates governed metrics, and never exp
  assert.throws(()=>c.compileDataQuery(pkg(),{...input(),filters:[...input().filters,{field_id:"amount",operator:"GT",values:["1; DROP TABLE x"]}]}),/数字筛选值/);
  assert.throws(()=>c.compileQuery(pkg(),{table_id:"table",metric_ids:["amount"],limit:200000}),/5000/);
 });
+test("per-condition connectors keep required dates and snapshots outside OR",()=>{
+ const compiler=new QueryCompilerService();
+ const filters=[...input().filters,{field_id:"shop",operator:"EQ",values:["店铺 A"]},{field_id:"amount",operator:"GT",values:["100"],logic:"OR"}];
+ const guarded="`ds` BETWEEN '20261001' AND '20261009' AND (`shop` = '店铺 A' OR `amount` > 100)";
+ for(const mode of ["DETAIL","AGGREGATE"]){
+  const request={...input(mode),filters};const sql=compiler.compileDataQuery(pkg(),request).sql;
+  assert.ok(sql.includes(guarded));if(mode==="AGGREGATE")assert.ok(sql.includes("GROUP BY `shop`"));
+  const andSql=compiler.compileDataQuery(pkg(),{...request,filters:filters.map(filter=>({...filter,logic:"AND"}))}).sql;assert.ok(andSql.includes("(`shop` = '店铺 A' AND `amount` > 100)"));
+ }
+ const snapshot=compiler.compileDataQuery(pkg("FULL_SNAPSHOT"),{...input(),filters:filters.slice(1)},{snapshotDate:"20261009"});
+ assert.ok(snapshot.sql.includes("`ds` = '20261009' AND (`shop` = '店铺 A' OR `amount` > 100)"));
+ assert.throws(()=>compiler.compileDataQuery(pkg(),{...input(),filters:filters.slice(1)}),/必须选择默认统计日期/);
+ for(const logic of ["XOR","or",null,123,"OR 1=1 --"]){assert.throws(()=>compiler.compileDataQuery(pkg(),{...input(),filters:[...input().filters,{field_id:"amount",operator:"GT",values:["100"],logic}]}),/只能是 AND 或 OR/);}
+ const dateOnly=compiler.compileDataQuery(pkg(),{...input(),filters:input().filters.map(filter=>({...filter,logic:"OR"}))}).sql;assert.ok(!dateOnly.includes("()"));assert.ok(!dateOnly.includes(" OR "));
+ const single=compiler.compileDataQuery(pkg("FULL_SNAPSHOT"),{...input(),filters:[{field_id:"amount",operator:"GT",values:["100"],logic:"OR"}]},{snapshotDate:"20261009"}).sql;assert.ok(single.includes("AND (`amount` > 100)"));assert.ok(!single.includes(" OR "));
+});
+test("mixed connectors follow SQL AND precedence and keep datetime default-date scope mandatory",()=>{
+ const compiler=new QueryCompilerService();const {Parser}=require("node-sql-parser");
+ const business=[{field_id:"shop",operator:"EQ",values:["A"]},{field_id:"amount",operator:"GT",values:["100"],logic:"OR"},{field_id:"amount",operator:"LT",values:["200"],logic:"AND"},{field_id:"shop",operator:"EQ",values:["B"],logic:"OR"}];
+ const group="(`shop` = 'A' OR `amount` > 100 AND `amount` < 200 OR `shop` = 'B')";
+ for(const mode of ["DETAIL","AGGREGATE"]){
+  const compiled=compiler.compileDataQuery(pkg(),{...input(mode),filters:[...input().filters,...business]});assert.ok(compiled.sql.includes(group));
+  const [ast]=new Parser().astify(compiled.sql,{database:"Hive"});assert.equal(ast.where.operator,"AND");assert.equal(ast.where.right.operator,"OR");assert.equal(ast.where.right.left.operator,"OR");assert.equal(ast.where.right.left.right.operator,"AND");
+ }
+ const data=pkg();data.fields[0].normalized_type="DATETIME";
+ const sql=compiler.compileDataQuery(data,{...input(),filters:[...business,{...input().filters[0],logic:"OR"}]}).sql;
+ assert.ok(sql.includes("`ds` >= '2026-10-01 00:00:00' AND `ds` < '2026-10-10 00:00:00' AND "+group));
+});
+test("OR keeps datetime bounds together and candidate keyword searches always narrow the OR result",()=>{
+ const compiler=new QueryCompilerService();const period={field_id:"time",preset:"CUSTOM",start:"2026-10-01",end:"2026-10-09"};
+ const filters=[...input().filters,period,{field_id:"amount",operator:"GT",values:["100"],logic:"OR"}];
+ const group="((`time` >= '2026-10-01 00:00:00' AND `time` < '2026-10-10 00:00:00') OR `amount` > 100)";
+ assert.ok(compiler.compileDataQuery(pkg(),{...input(),filters}).sql.includes(group));
+ const candidate=compiler.compileDataDimensionValues(pkg(),{table_id:"table",field_id:"shop",keyword:"旗舰",filters});
+ assert.ok(candidate.sql.includes("`ds` BETWEEN '20261001' AND '20261009' AND "+group+" AND `shop` LIKE '%旗舰%'"));assert.equal(candidate.limit,200);
+ const data=pkg();data.fields.find(field=>field.id==="shop").normalized_type="INTEGER";
+ assert.ok(compiler.compileDataDimensionValues(data,{table_id:"table",field_id:"shop",keyword:"12",filters}).sql.includes(group+" AND CAST(`shop` AS STRING) LIKE '%12%'"));
+ assert.throws(()=>compiler.compileDataDimensionValues(pkg(),{table_id:"table",field_id:"shop",filters:filters.map(filter=>({...filter,logic:"XOR"}))}),/只能是 AND 或 OR/);
+});
+
 test("dates end yesterday in Shanghai, validate calendar days and include full datetime end",()=>{
  const now=new Date("2026-10-09T17:00:00Z");
  assert.deepEqual(resolveDate({preset:"LAST_7_DAYS"},now),{start:"2026-10-03",end:"2026-10-09"});
@@ -46,9 +86,24 @@ test("dates end yesterday in Shanghai, validate calendar days and include full d
  assert.throws(()=>c.compileDataQuery(pkg("FULL_SNAPSHOT"),input(),{snapshotDate:"20261009"}),/快照日期/);
  assert.throws(()=>c.compileDataQuery(pkg(),{...input(),filters:[...input().filters,{field_id:"shop",preset:"YESTERDAY"}]}),/未配置日期/);
 });
+test("date presets resolve to actual dates and submit a single SELECT in detail, aggregate and candidate queries",()=>{
+ const compiler=new QueryCompilerService();const {Parser}=require("node-sql-parser");
+ for(const [preset,days] of [["YESTERDAY",1],["LAST_7_DAYS",7],["LAST_30_DAYS",30],["LAST_N_DAYS",13]]){
+  const filters=[{field_id:"date",preset,days:preset==="LAST_N_DAYS"?days:999},{field_id:"shop",operator:"EQ",values:["A"]},{field_id:"amount",operator:"GT",values:["100"],logic:"OR"}];
+  for(const mode of ["DETAIL","AGGREGATE"]){
+   const compiled=compiler.compileDataQuery(pkg(),{...input(mode),filters});const range=compiled.resolvedDates[0];
+   assert.ok(compiled.sql.startsWith("SELECT"));assert.doesNotMatch(compiled.sql,/GETDATE|DATEADD|DATETRUNC|TO_CHAR|\bSET\b/);assert.equal(compiled.sql.split(";").filter(part=>part.trim()).length,1);
+   assert.ok(compiled.sql.includes("`ds` BETWEEN '"+range.start.replaceAll("-","")+"' AND '"+range.end.replaceAll("-","")+"' AND (`shop` = 'A' OR `amount` > 100)"));
+   assert.equal((Date.parse(range.end)-Date.parse(range.start))/86400000+1,days);const [ast]=new Parser().astify(compiled.sql,{database:"Hive"});assert.equal(ast.where.operator,"AND");assert.equal(ast.where.right.operator,"OR");
+  }
+  const candidate=compiler.compileDataDimensionValues(pkg(),{table_id:"table",field_id:"shop",filters:filters.filter(filter=>filter.field_id!=="shop"),keyword:"旗舰"});assert.ok(candidate.sql.startsWith("SELECT"));assert.match(candidate.sql,/`ds` BETWEEN '\d{8}' AND '\d{8}'/);assert.doesNotMatch(candidate.sql,/GETDATE|DATEADD|DATETRUNC|\bSET\b/);assert.ok(candidate.sql.includes("AND `shop` LIKE '%旗舰%'"));assert.equal(candidate.limit,200);
+ }
+ for(const days of [0,-1,1.5,36501,null,"7",NaN,Infinity,"7); DROP TABLE sales;"]){assert.throws(()=>compiler.compileDataQuery(pkg(),{...input(),filters:[{field_id:"date",preset:"LAST_N_DAYS",days}]}),/整数/);}
+});
+
 function fixture() {
  const undo=[];const replace=(obj,key,fn)=>{const before=obj[key];obj[key]=fn;undo.push(()=>obj[key]=before);};
- const now=new Date();const jobs=new Map();const chunks=new Map();const calls={cancel:[],reads:0};
+ const now=new Date();const jobs=new Map();const chunks=new Map();const calls={cancel:[],reads:0,sqls:[]};
  const match=(row,where)=>Object.entries(where||{}).every(([key,value])=>key==="ownerMemberNo_idempotencyKey" ? match(row,value) : value && typeof value==="object" && "in" in value ? value.in.includes(row[key]) : row[key]===value);
  replace(prisma.queryExecution,"findUnique",async({where})=>[...jobs.values()].find(row=>match(row,where))||null);
  replace(prisma.queryExecution,"create",async({data})=>{const row={id:"q"+jobs.size,status:"PENDING",submittedAt:now,startedAt:null,completedAt:null,error:null,result:null,resultRowCount:0,resultBytes:0,truncated:false,...data};jobs.set(row.id,row);return row;});
@@ -61,13 +116,23 @@ function fixture() {
  const compiler=new QueryCompilerService();
  const queries=new QueryExecutionService({get:async()=>pkg("FULL_SNAPSHOT")},{},compiler);
  queries.resolveSnapshot=async()=> "20261009";
- queries.clientFor=async()=>({submitSql:async()=> "remote",getInstance:async()=>({status:"SUCCEEDED"}),cancelInstance:async(id)=>{calls.cancel.push(id);}});
+ queries.clientFor=async()=>({submitSql:async(sql)=>{calls.sqls.push(sql);return "remote";},getInstance:async()=>({status:"SUCCEEDED"}),cancelInstance:async(id)=>{calls.cancel.push(id);}});
  queries.projectFor=async()=>"p";
  const reader={async *read(){calls.reads++;yield [["1"]];}};
  const service=new DataQueryService({get:async()=>pkg("FULL_SNAPSHOT")},compiler,queries,{getWithCredentials:async()=>({connectionConfig:{endpoint:"https://mock"},credentials:{accessKey:"secret",secretKey:"secret"}})},reader);
  const add=(id,owner="A",status="RUNNING")=>{const row={id,kind:"DATA_QUERY",ownerMemberNo:owner,status,metaTableId:"table",dataSourceId:"source",remoteInstanceId:"remote",submittedAt:new Date(),expiresAt:new Date(Date.now()+86400000),request:{...input("DETAIL",["amount"]),filters:[]},sql:"SELECT amount",contentVersion:"v1",snapshotDate:null,resolvedDates:[],resultColumns:[{id:"amount",name:"金额",type:"DECIMAL",unit:"元"}],resultRowCount:0,truncated:false};jobs.set(id,row);return row;};
  return {service,reader,queries,jobs,chunks,calls,add,close(){undo.reverse().forEach(fn=>fn());}};
 }
+test("submitted, stored and exported SQL use the same actual date interval without script statements",async()=>{
+ const f=fixture();
+ try{
+  const request={...input("DETAIL",["amount"]),filters:[{field_id:"time",preset:"LAST_N_DAYS",days:7}],idempotency_key:"fixed-dates"};
+  const task=await f.service.submit("A",request);assert.equal(task.sql,f.calls.sqls[0]);assert.equal(f.jobs.get(task.id).sql,task.sql);assert.ok(task.sql.startsWith("SELECT"));assert.doesNotMatch(task.sql,/GETDATE|DATEADD|DATETRUNC|\bSET\b/);const range=task.resolved_dates[0];assert.ok(task.sql.includes("`time` >= '"+range.start+" 00:00:00'"));assert.equal(task.request.filters[0].preset,"LAST_N_DAYS");assert.equal(task.request.filters[0].days,7);
+  await f.service.refresh(task.id);const stream=new PassThrough(),buffers=[];stream.on("data",buffer=>buffers.push(buffer));await new DataQueryExportService(f.service).write("A",await f.service.ready("A",task.id),stream);
+  const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.concat(buffers));const notes=[];book.getWorksheet("查询说明").eachRow(row=>notes.push(row.values));assert.equal(notes.find(row=>row[1]==="SQL")[2],task.sql);assert.deepEqual(JSON.parse(notes.find(row=>row[1]==="实际日期")[2]),task.resolved_dates);
+ }finally{f.close();}
+});
+
 test("full reader persists empty, >10k, >5MB, exactly 200k and extra row without silent truncation",async()=>{
  const f=fixture();
  try {
@@ -114,10 +179,14 @@ test("owner checks cover state, pages, cancel, export, legacy and account-scoped
    for(const operation of [()=>f.service.get("A",id),()=>f.service.result("A",id),()=>f.service.cancel("A",id),()=>f.service.ready("A",id)])await assert.rejects(operation(),error=>error.getStatus()===404);
   }
   await assert.rejects(f.service.get(undefined,"A"),error=>error.getStatus()===401);
-  const request={...input("DETAIL",["amount"]),filters:[],idempotency_key:"same"};
+  const request={...input("DETAIL",["amount"]),filters:[{field_id:"shop",operator:"EQ",values:["A"]},{field_id:"amount",operator:"GT",values:["1"],logic:"AND"}],idempotency_key:"same"};
   const a=await f.service.submit("A",request),b=await f.service.submit("B",request);assert.notEqual(a.id,b.id);
   assert.equal((await f.service.submit("A",request)).id,a.id);
   await assert.rejects(f.service.submit("A",{...request,field_ids:["shop"]}),error=>error.getStatus()===409);
+  const orFilters=request.filters.map((filter,index)=>index===1?{...filter,logic:"OR"}:filter);
+  await assert.rejects(f.service.submit("A",{...request,filters:orFilters}),error=>error.getStatus()===409);
+  const or=await f.service.submit("A",{...request,idempotency_key:"or",filters:orFilters});assert.equal(or.request.filters[1].logic,"OR");
+  await assert.rejects(f.service.submit("A",{...request,filters:request.filters.map(filter=>({...filter,logic:"XOR"}))}),/只能是 AND 或 OR/);
   await assert.rejects(f.queries.cancel("B",a.id),error=>error.getStatus()===404);
   const single=f.add("excel","A","SUCCEEDED");single.resultRowCount=10001;
   for(let offset=0;offset<10001;offset+=1000)f.chunks.set("excel:"+offset/1000,{queryExecutionId:"excel",chunkIndex:offset/1000,rows:Array.from({length:Math.min(1000,10001-offset)},(_,i)=>[offset+i===0 ? null : offset+i===1 ? "[NULL]" : offset+i===2 ? "=CMD()" : String(offset+i)])});
@@ -139,7 +208,8 @@ test("Excel preserves Chinese and precision while exporting null as a blank cell
  for(let index=0;index<rows.length;index++){
   assert.equal(data.getCell(index+2,1).value,rows[index][0]);assert.equal(data.getCell(index+2,2).value,rows[index][1]);assert.equal(data.getCell(index+2,3).value,rows[index][2]);assert.equal(data.getCell(index+2,5).value,rows[index][4]);
  }
- assert.equal(data.getCell("D2").value,"");assert.equal(data.getCell("D3").value,"[NULL]");assert.equal(data.getCell("D4").value,"'=CMD()");
+ // ExcelJS reads an empty inline string back as a blank (null) cell.
+ assert.equal(data.getCell("D2").value,null);assert.equal(data.getCell("D3").value,"[NULL]");assert.equal(data.getCell("D4").value,"'=CMD()");
  assert.equal(data.getCell("C2").value,null);assert.equal(data.getCell("C3").value,"NULL");assert.equal(data.getCell("C4").value,null);
  const notes=book.getWorksheet("查询说明");const noteRows=[];notes.eachRow(row=>noteRows.push(row.values));assert.ok(noteRows.some(row=>row[1]==="空值"&&row[2].includes("空白单元格")));
 });
@@ -147,9 +217,22 @@ test("Excel preserves Chinese and precision while exporting null as a blank cell
 test("candidate values remove own condition, retain others and belong to requester",async()=>{
  const f=fixture();
  try{
-  let captured;f.queries.dimensionValuesPackage=async(member,semantic,request,complete)=>{captured={member,request,complete};return {id:"candidate"};};
-  await f.service.dimensionValues("B",{table_id:"table",field_id:"shop",filters:[{field_id:"shop",operator:"EQ",values:["self"]},{field_id:"amount",operator:"GT",values:["1"]}],keyword:"搜索"});
-  assert.equal(captured.member,"B");assert.equal(captured.request.limit,200);assert.equal(captured.complete,true);assert.deepEqual(captured.request.filters,[{field_id:"amount",operator:"GT",values:["1"]}]);
+  let captured;f.queries.submitDataDimensionValues=async(member,semantic,request,compiled)=>{captured={member,request,compiled};return {id:"candidate"};};
+  const filters=[{field_id:"shop",operator:"EQ",values:["self"]},{field_id:"amount",operator:"GT",values:["1"]},{field_id:"time",preset:"CUSTOM",start:"2026-10-01",end:"2026-10-09",logic:"OR"}];
+  await f.service.dimensionValues("B",{table_id:"table",field_id:"shop",filters,keyword:"搜索"});
+  assert.equal(captured.member,"B");assert.equal(captured.compiled.limit,200);assert.deepEqual(captured.request.filters,filters.slice(1));assert.ok(!captured.compiled.sql.includes("self"));assert.ok(captured.compiled.sql.includes("AND `shop` LIKE '%搜索%'"));assert.ok(captured.compiled.sql.includes("`amount` > 1 OR (`time` >="));
+  await assert.rejects(f.service.dimensionValues("B",{table_id:"table",field_id:"shop",filters:[{field_id:"amount",operator:"GT",values:["1"],logic:"XOR"}]}),/只能是 AND 或 OR/);
+ }finally{f.close();}
+});
+
+test("candidate executions store filter relation with a 200-row cap and reject mismatched idempotent replay",async()=>{
+ const f=fixture();
+ try{
+  const request={table_id:"table",field_id:"shop",filters:[{field_id:"amount",operator:"GT",values:["1"]},{field_id:"amount",operator:"LT",values:["10"],logic:"OR"}],idempotency_key:"candidate-or"};
+  const result=await f.service.dimensionValues("B",request);const stored=f.jobs.get(result.id);
+  assert.equal(stored.ownerMemberNo,"B");assert.equal(stored.kind,"SEMANTIC_QUERY");assert.equal(stored.request.filters[1].logic,"OR");assert.equal(stored.request.limit,200);assert.ok(stored.sql.includes("LIMIT 201"));assert.equal(f.queries.requestLimit(stored.request),200);
+  assert.equal((await f.service.dimensionValues("B",request)).id,result.id);
+  await assert.rejects(f.service.dimensionValues("B",{...request,filters:request.filters.map(filter=>({...filter,logic:"AND"}))}),error=>error.getStatus()===409);
  }finally{f.close();}
 });
 

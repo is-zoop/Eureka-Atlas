@@ -8,6 +8,8 @@ import { MaxComputeResultReader } from "./maxcompute-result-reader";
 import { QueryCompilerService } from "./query-compiler.service";
 import { QueryController } from "./query.controller";
 import { QueryExecutionService } from "./query-execution.service";
+import { SavedDataQueryController } from "./saved-data-query.controller";
+import { SavedDataQueryService } from "./saved-data-query.service";
 
-@Module({ imports: [DatasourceModule, PackageModule], controllers: [QueryController, DataQueryController], providers: [QueryCompilerService, QueryExecutionService, DataQueryService, DataQueryExportService, MaxComputeResultReader], exports: [QueryExecutionService] })
+@Module({ imports: [DatasourceModule, PackageModule], controllers: [QueryController, DataQueryController, SavedDataQueryController], providers: [QueryCompilerService, QueryExecutionService, DataQueryService, DataQueryExportService, MaxComputeResultReader, SavedDataQueryService], exports: [QueryExecutionService] })
 export class QueryModule {}

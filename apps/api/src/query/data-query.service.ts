@@ -6,7 +6,6 @@ import { DatasourceService } from "../datasource/datasource.service";
 import { PackageService } from "../package/package.service";
 import { QueryCompilerService } from "./query-compiler.service";
 import { QueryExecutionService } from "./query-execution.service";
-import { normalizeDataFilters } from "./data-query-dates";
 import { MaxComputeResultReader } from "./maxcompute-result-reader";
 
 const terminal = new Set(["SUCCEEDED","FAILED","CANCELLED","TIMED_OUT"]);
@@ -27,6 +26,7 @@ export class DataQueryService implements OnModuleInit, OnModuleDestroy {
     if (input.idempotency_key !== undefined && (typeof input.idempotency_key !== "string" || !input.idempotency_key.trim() || input.idempotency_key.length>200)) throw new BadRequestException("幂等键无效");
     input = {table_id:input.table_id,mode:input.mode,field_ids:input.field_ids,filters:input.filters ?? [],order_by:input.order_by ?? [],...(input.idempotency_key ? {idempotency_key:input.idempotency_key} : {})};
     const pkg = await this.packages.get(input.table_id);
+    this.compiler.validateDataQuery(pkg, input);
     const compiled = this.compiler.compileDataQuery(pkg,input,{snapshotDate:await this.queries.resolveSnapshot(pkg)});
     const item = await this.queries.submitData(member,pkg,input,compiled);
     return this.get(member,item.id);
@@ -36,8 +36,9 @@ export class DataQueryService implements OnModuleInit, OnModuleDestroy {
     if (!input || typeof input.table_id !== "string") throw new BadRequestException("请选择数据表");
     const pkg = await this.packages.get(input.table_id);
     if (input.filters !== undefined && (!Array.isArray(input.filters) || input.filters.some(item => !item || typeof item !== "object"))) throw new BadRequestException("筛选条件无效");
-    const normalized = normalizeDataFilters(pkg,(input.filters ?? []).filter(item => item.field_id !== input.field_id));
-    return this.queries.dimensionValuesPackage(member,pkg,{table_id:input.table_id,field_id:input.field_id,idempotency_key:input.idempotency_key,keyword:input.keyword,filters:normalized.filters,date_range:normalized.dateRange,limit:200},true);
+    input = { table_id: input.table_id, field_id: input.field_id, filters: (input.filters ?? []).filter(item => item.field_id !== input.field_id), ...(input.idempotency_key !== undefined ? { idempotency_key: input.idempotency_key } : {}), ...(input.keyword !== undefined ? { keyword: input.keyword } : {}) };
+    const compiled = this.compiler.compileDataDimensionValues(pkg, input, { snapshotDate: await this.queries.resolveSnapshot(pkg) });
+    return this.queries.submitDataDimensionValues(member, pkg, input, compiled);
   }
   async get(member: string,id: string): Promise<DataQueryExecution> {
     const item = await this.owned(member,id);

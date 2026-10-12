@@ -1,0 +1,14 @@
+Atlas WPS Data Assistant 0.4.1
+
+Node.js v24.12.0, Copyright Node.js contributors / OpenJS Foundation.
+The complete Node.js and bundled third-party notices are in NODE-LICENSE.txt.
+Source: https://github.com/nodejs/node/tree/v24.12.0
+
+The installer is built with NSIS 3.13, Copyright (C) 1999-2026 Contributors.
+https://nsis.sourceforge.io/  Full notices are in NSIS-LICENSE.txt.
+The installed helper uses Windows .NET Framework 4.8 (not redistributed).
+
+Web UI dependency notices are shipped in WEB-LICENSES.txt. Sources and versions
+are recorded in apps/wps-addin/package.json and pnpm-lock.yaml in Eureka Atlas.
+
+Atlas does not claim ownership of WPS Office or third-party components.
