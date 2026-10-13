@@ -4,6 +4,8 @@ Enterprise data semantic governance platform. This repository currently contains
 
 ## Prerequisites
 
+Linux 容器部署请使用根目录 `docker-compose.yaml`；首次启动、HTTPS 反代、密钥与数据库迁移说明见 [deploy/README.md](deploy/README.md)。WPS 安装包仍在 Windows 客户端使用。
+
 - Node.js 24+
 - pnpm 11+
 - PostgreSQL running at `127.0.0.1:5432`
@@ -13,7 +15,7 @@ Enterprise data semantic governance platform. This repository currently contains
 1. Copy `.env.example` to `.env` and replace `<PASSWORD>` with the password for the local `postgres` account.
 2. Install dependencies: `pnpm install`
 3. Validate the Prisma configuration: `pnpm db:validate`
-4. Verify the database connection: `pnpm db:push`
+4. Initialize a new database with the checked-in migrations: `pnpm --filter @eureka-atlas/database run deploy`. Do not use `db:push` to initialize deployment databases; it does not record migration history. Inspect and reconcile existing databases before deploying.
 
 ## Run
 
@@ -34,7 +36,7 @@ Enterprise data semantic governance platform. This repository currently contains
 - Data assets, semantic definitions and model configurations remain shared; ask conversations and all query execution records are private to the Haze member number. No roles or user-management screens are added. Logging out revokes only the current Eureka session, not Haze sessions, and does not stop background ask tasks.
 - Business APIs, SSE, and Excel downloads require a valid session. Health and API documentation remain public. Haze downtime returns 503 without revoking the session; account disablement, token expiry, password changes and Haze logout invalidate it.
 - Add the exact Eureka web origin to `WEB_ORIGIN` for LAN or deployed access. Production requires HTTPS because session cookies are Secure. Browser requests continue through same-origin `/api`.
-- Apply the checked-in migration with `pnpm --filter @eureka-atlas/database deploy`, regenerate with `pnpm db:generate`, build database/API with `pnpm --filter @eureka-atlas/database build` and `pnpm build:api`, then restart the API. Never reset existing databases to add authentication.
+- Apply the checked-in migration with `pnpm --filter @eureka-atlas/database run deploy`, regenerate with `pnpm db:generate`, build database/API with `pnpm --filter @eureka-atlas/database build` and `pnpm build:api`, then restart the API. Never reset existing databases to add authentication.
 - If old migrations are pending while their SQL changes already exist, do not blindly deploy them. Inspect the database and apply only the new authentication migration, then record `20261009043000_haze_auth_session` with Prisma `migrate resolve --applied`. The local database used for this integration has this migration applied; pre-existing migration-history discrepancies were left untouched.
 - Focused tests: build the API, then run `pnpm --filter @eureka-atlas/api exec node --test test/auth.test.js` and `pnpm --filter @eureka-atlas/web exec node --test test/auth.test.cjs`. Real Haze account login, expiry, logout, and page appearance are checked manually; no browser automation is required.
 

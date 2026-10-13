@@ -4,6 +4,8 @@ dist/
 coverage/
 .env
 .env.local
+.env.docker
+deploy-data/
 !.env.example
 packages/database/generated/
 apps/wps-addin/.build-tools/

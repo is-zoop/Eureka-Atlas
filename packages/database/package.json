@@ -8,6 +8,7 @@
     ".": "./dist/index.js"
   },
   "scripts": {
+    "test:migrations": "node --test test/migrations.test.cjs",
     "build": "tsc -p tsconfig.json",
     "generate": "dotenv -e ../../.env -- prisma generate",
     "migrate": "dotenv -e ../../.env -- prisma migrate dev --name metadata_assets",

@@ -1,0 +1,104 @@
+name: eureka-atlas
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_DB: ${POSTGRES_DB:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+      TZ: Asia/Shanghai
+    ports:
+      - "192.168.40.132:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  migrate:
+    image: eureka-atlas-migrate:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+    restart: "no"
+    init: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@postgres:5432/${POSTGRES_DB:-atlas}?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: eureka-atlas-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@postgres:5432/${POSTGRES_DB:-atlas}?schema=public
+      DATA_SOURCE_ENCRYPTION_KEY: ${DATA_SOURCE_ENCRYPTION_KEY:?Set DATA_SOURCE_ENCRYPTION_KEY in .env.docker}
+      HAZE_API_ORIGIN: ${HAZE_API_ORIGIN:?Set HAZE_API_ORIGIN in .env.docker}
+      WEB_ORIGIN: ${WEB_ORIGIN:?Set the public HTTPS WEB_ORIGIN in .env.docker}
+      SQLITE_DATA_SOURCE_ROOT: /data/sqlite
+      MAXCOMPUTE_PYTHON_BIN: /opt/pyodps/bin/python
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    expose:
+      - "3001"
+    volumes:
+      - type: bind
+        source: ${SQLITE_DATA_DIR:-./deploy-data/sqlite}
+        target: /data/sqlite
+        read_only: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health', {signal: AbortSignal.timeout(3000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  web:
+    image: eureka-atlas-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      TZ: Asia/Shanghai
+      API_ORIGIN: http://api:3001
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login', {signal: AbortSignal.timeout(3000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  postgres_data:
