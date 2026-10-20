@@ -63,7 +63,7 @@ test("saves compact draft and validates metric aggregation", () => {
     fields,
     table,
   );
-  assert.throws(() => service.validatePublish(invalid), /aggregation/);
+  assert.throws(() => service.validatePublish(invalid), /聚合方式/);
 });
 test("drops legacy grain names that are not selected physical columns", () => {
   const service = new GovernanceWorkspaceService({}, {});
@@ -187,4 +187,43 @@ test("publish controller only accepts the publisher from authenticated request c
   assert.deepEqual(calls[0], ["task", { member_no: "member-A", name: "发布人甲" }, body]);
   assert.throws(() => controller.publish({}, "task", body), error => error.getStatus() === 401);
   assert.equal(calls.length, 1);
+});
+
+test("permission is optional for publishing and clearing a field removes a stale relation", () => {
+  const service = new GovernanceWorkspaceService({}, {});
+  const noPermission = { ...input, table: { ...input.table, permissionColumnId: null, permissionRelation: null } };
+  const draft = service.normalizeDraft(noPermission, fields, table);
+  assert.doesNotThrow(() => service.validatePublish(draft, fields));
+  assert.equal(draft.table.permissionColumnId, null);
+  assert.equal(draft.table.permissionRelation, null);
+  const cleared = service.normalizeDraft({ ...input, table: { ...input.table, permissionColumnId: null } }, fields, table);
+  assert.equal(cleared.table.permissionRelation, null);
+  assert.doesNotThrow(() => service.validatePublish(cleared, fields));
+  const incomplete = service.normalizeDraft({ ...input, table: { ...input.table, permissionRelation: null } }, fields, table);
+  assert.throws(() => service.validatePublish(incomplete, fields), /填写时必须同时选择权限字段和权限映射关系/);
+});
+
+test("publishing without a permission field persists null for both create and update", async () => {
+  const { prisma } = require("@eureka-atlas/database");
+  const oldTransaction = prisma.$transaction, oldFindColumns = prisma.metaColumn.findMany;
+  const service = new GovernanceWorkspaceService({ generateForTable: async () => {} }, {}, { syncForTable: async () => {} }, {});
+  const draft = service.normalizeDraft({ ...input, table: { ...input.table, permissionColumnId: null, permissionRelation: null } }, fields, table);
+  service.task = async () => ({ id: "task", metaTableId: "table", selectedColumns: draft.selectedColumns, metaTable: table, review: { tableDraft: draft.table, columnDrafts: draft.columns, metricDrafts: [] } });
+  service.get = async () => ({});
+  let persisted;
+  const noop = async () => {};
+  try {
+    prisma.metaColumn.findMany = async () => fields;
+    prisma.$transaction = async callback => callback({
+      tableSemantic: { upsert: async record => { persisted = record; } },
+      columnSemantic: { deleteMany: noop, upsert: noop },
+      semanticMetric: { deleteMany: noop },
+      governanceTask: { update: noop },
+    });
+    await service.publish("task", { member_no: "member", name: "发布人" });
+    for (const data of [persisted.create, persisted.update]) {
+      assert.equal(data.permissionColumnId, null);
+      assert.equal(data.permissionRelation, null);
+    }
+  } finally { prisma.$transaction = oldTransaction; prisma.metaColumn.findMany = oldFindColumns; }
 });

@@ -8,6 +8,11 @@ import { HazeAuthService } from "./haze-auth.service";
 
 export const SESSION_COOKIE = "eureka_atlas_session";
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+export function personalCredentialFromRequest(request: Request) {
+  const match = /^Bearer[ \t]+([A-Za-z0-9_-]{1,256})$/i.exec(request.get("authorization") ?? "");
+  if (!match) throw new UnauthorizedException("请通过 Authorization Bearer 提供有效的 Haze 个人凭证。");
+  return match[1];
+}
 
 @Injectable()
 export class AuthService {
@@ -40,6 +45,14 @@ export class AuthService {
     return result.user;
   }
 
+  // Server-only access for the authenticated user's Haze profile operations.
+  async sessionToken(request: Request) {
+    const id = this.sessionId(request);
+    const session = id ? await prisma.authSession.findUnique({ where: { id } }) : null;
+    if (!session || session.expiresAt.getTime() <= Date.now()) throw new UnauthorizedException("登录已过期，请重新登录。");
+    return this.crypto.decrypt(session.tokenEncrypted);
+  }
+
   async authenticate(request: Request) {
     const id = this.sessionId(request);
     const session = id ? await prisma.authSession.findUnique({ where: { id } }) : null;
@@ -53,6 +66,16 @@ export class AuthService {
       if (error instanceof UnauthorizedException) await prisma.authSession.deleteMany({ where: { id } });
       throw error;
     }
+  }
+
+  async authenticateCredential(request: Request) {
+    // Identity validation is shared by REST and MCP; routes enforce their own permissions.
+    return this.authenticatePersonalCredential(personalCredentialFromRequest(request));
+  }
+
+  async authenticatePersonalCredential(credential: string) {
+    if (!/^[A-Za-z0-9_-]{1,256}$/.test(credential)) throw new UnauthorizedException("个人凭证无效。");
+    return this.haze.personalCredentialUser(credential);
   }
 
   async logout(request: Request, response: Response) {

@@ -19,7 +19,7 @@ function fixture(id) {
   const table = { dataDomain: "销售管理", businessName: "人工名称", description: "人工描述", grain: "", permissionColumnId: null, permissionRelation: null, queryConfig: { storage: null, default_stat_date: { field_id: null, format: "" } } };
   return { id: "task-" + id, status: "REVIEWING", table: { id, name: "table_" + id }, allColumns: [], selectedColumns: [], draft: { table, columns: [], metrics: [] }, ai: { table: { ...table, businessName: "AI 名称" }, columns: [], metrics: [{ id: "suggestion", name: "AI 指标", formula: "SUM(amount)" }] }, published: { table: null, columns: 0 } };
 }
-function harness() {
+function harness(workspaceFor = fixture) {
   let tableId = "A", stateIndex = 0, effectIndex = 0;
   const states = [], effectDeps = [], pending = [];
   const react = {
@@ -43,7 +43,7 @@ function harness() {
     if (name === "react/jsx-runtime") return require(name);
     if (name === "next/link") return { __esModule: true, default: "Link" };
     if (name === "next/navigation") return { useParams: () => ({ tableId }), useRouter: () => ({ replace() {} }), useSearchParams: () => new URLSearchParams() };
-    if (name === "@/lib/api") return { api: async url => url === "/settings/governance-options" ? { dataDomains: [], permissionRelations: [] } : url.endsWith("/generations/active") ? null : fixture(tableId) };
+    if (name === "@/lib/api") return { api: async url => url === "/settings/governance-options" ? { dataDomains: [], permissionRelations: [] } : url.endsWith("/generations/active") ? null : workspaceFor(tableId) };
     return new Proxy({}, { get: (_, property) => property === "__esModule" ? false : String(property) });
   };
   new Function("module", "exports", "require", code)(mod, mod.exports, localRequire);
@@ -82,5 +82,30 @@ test("existing suggestions start hidden, toggle all suggestion areas, and reset 
   await generation.props.onCompleted(); tree = view.render();
   assert.ok(button("隐藏 AI 建议"));
   assert.equal(metricEditor().props.suggestions.length, 1);
+});
+
+test("permission field is explicitly optional and clearing it removes the mapping without opening its dialog", async () => {
+  const view = harness(id => {
+    const workspace = fixture(id);
+    workspace.allColumns = [{ id: "shop", name: "shop_id", dataType: "STRING", isPartition: false }];
+    workspace.selectedColumns = ["shop"];
+    workspace.draft.table.permissionColumnId = "shop";
+    workspace.draft.table.permissionRelation = "平台店铺名称";
+    workspace.draft.columns = [{ metaColumnId: "shop", metricName: "店铺", semanticType: "DIMENSION", aggregation: "", unit: "", groupable: true, candidateValueQueryable: true, labelDescription: "" }];
+    return workspace;
+  });
+  view.render(); await view.flush();
+  let tree = view.render(); await view.flush();
+  assert.ok(flatten(tree).some(node => node.type === "FieldLabel" && text(node) === "权限字段（选填）"));
+  const picker = () => flatten(tree).find(node => node.type === "Combobox" && node.props.searchPlaceholder === "选择权限字段");
+  assert.deepEqual(picker().props.options[0], { value: "", label: "不设置权限字段" });
+  assert.equal(picker().props.value, "shop");
+  assert.ok(flatten(tree).some(node => node.type === "button" && text(node) === "平台店铺名称"));
+  picker().props.onValueChange(""); tree = view.render();
+  assert.equal(picker().props.value, "");
+  assert.equal(flatten(tree).some(node => node.type === "button" && text(node) === "平台店铺名称"), false);
+  assert.equal(flatten(tree).find(node => node.type === "Dialog").props.open, false);
+  picker().props.onValueChange("shop"); tree = view.render();
+  assert.equal(flatten(tree).find(node => node.type === "Dialog").props.open, true);
 });
 

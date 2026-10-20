@@ -241,7 +241,7 @@ test("HTTP endpoints require login, reject cross-account pages/cancel/export and
  const {Test}=require("@nestjs/testing"),{APP_GUARD}=require("@nestjs/core");
  const {AuthController}=require("../dist/auth/auth.controller"),{AuthService}=require("../dist/auth/auth.service"),{AuthGuard}=require("../dist/auth/auth.guard"),{HazeAuthService}=require("../dist/auth/haze-auth.service"),{CredentialCryptoService}=require("../dist/datasource/credential-crypto.service");
  const {DataQueryController}=require("../dist/query/data-query.controller"),{QueryController}=require("../dist/query/query.controller");
- const profile=member=>({member_no:member,name:member,phone:"13800000001",status:"active",email:null,avatar_url:null,department:""});
+ const profile=member=>({member_no:member,name:member,phone:"13800000001",status:"active",role_code:"USER",role_name:"使用者",email:null,avatar_url:null,department:""});
  replace(prisma.authSession,"create",async({data})=>{authRows.set(data.id,data);return data;});
  replace(prisma.authSession,"findUnique",async({where})=>authRows.get(where.id)||null);
  replace(prisma.authSession,"deleteMany",async()=>({count:0}));

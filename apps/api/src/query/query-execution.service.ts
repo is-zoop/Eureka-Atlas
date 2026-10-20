@@ -8,6 +8,8 @@ import { MaxComputeClient } from "../metadata/maxcompute.client";
 import { PackageService } from "../package/package.service";
 import { QueryCompilerService, type CompiledQuery } from "./query-compiler.service";
 
+export type QueryAdmission = {sessionId:string;revision:number;check:(tx:Prisma.TransactionClient)=>Promise<void>};
+
 const resultExpiryMs = 24 * 60 * 60 * 1000;
 const timeoutMs = 10 * 60 * 1000;
 const resultByteLimit = 5 * 1024 * 1024;
@@ -78,11 +80,11 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     return this.submitPackage(memberNo, await this.packages.get(input.table_id), input);
   }
 
-  async submitPackage(memberNo: string, pkg: SemanticPackage, input: QueryRequest): Promise<QueryExecution> {
+  async submitPackage(memberNo: string, pkg: SemanticPackage, input: QueryRequest, admission?:QueryAdmission): Promise<QueryExecution> {
     requireMemberNo(memberNo);
     this.assertMaxCompute(pkg.source.type);
     const compiled = this.compiler.compileQuery(pkg, input, { snapshotDate: await this.resolveSnapshot(pkg) });
-    return this.createAndSubmit(memberNo, pkg, input, compiled, input.idempotency_key);
+    return this.createAndSubmit(memberNo, pkg, input, compiled, input.idempotency_key,QueryExecutionKind.SEMANTIC_QUERY,[],admission);
   }
 
   async dimensionValues(memberNo: string, input: DimensionValuesRequest): Promise<QueryExecution> {
@@ -90,11 +92,11 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     return this.dimensionValuesPackage(memberNo, await this.packages.get(input.table_id), input);
   }
 
-  async dimensionValuesPackage(memberNo: string, pkg: SemanticPackage, input: DimensionValuesRequest, completeDays = false): Promise<QueryExecution> {
+  async dimensionValuesPackage(memberNo: string, pkg: SemanticPackage, input: DimensionValuesRequest, completeDays = false, admission?:QueryAdmission): Promise<QueryExecution> {
     requireMemberNo(memberNo);
     this.assertMaxCompute(pkg.source.type);
     const compiled = this.compiler.compileDimensionValues(pkg, input, { snapshotDate: await this.resolveSnapshot(pkg),completeDays,candidateSearch:completeDays });
-    return this.createAndSubmit(memberNo, pkg, input, compiled, input.idempotency_key);
+    return this.createAndSubmit(memberNo, pkg, input, compiled, input.idempotency_key,QueryExecutionKind.SEMANTIC_QUERY,[],admission);
   }
   async submitDataDimensionValues(memberNo: string, pkg: SemanticPackage, input: DataDimensionValuesRequest, compiled: CompiledQuery): Promise<QueryExecution> {
     this.assertMaxCompute(pkg.source.type);
@@ -115,6 +117,24 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     if (execution.status !== "SUCCEEDED") throw new BadRequestException("查询尚未成功完成，暂时没有结果");
     if (!execution.result) throw new NotFoundException("查询结果已过期，请重新执行");
     return execution;
+  }
+
+  async replaySemantic(memberNo: string, input: QueryRequest | DimensionValuesRequest, agentSessionId?:string): Promise<QueryExecution | null> {
+    requireMemberNo(memberNo);
+    if (!input.idempotency_key) throw new BadRequestException("缺少幂等标识。");
+    const existing = await prisma.queryExecution.findUnique({ where: { ownerMemberNo_idempotencyKey: { ownerMemberNo: memberNo, idempotencyKey: input.idempotency_key } } });
+    return existing ? this.replay(existing, input, QueryExecutionKind.SEMANTIC_QUERY,agentSessionId) : null;
+  }
+
+  async semanticGet(memberNo: string, id: string) {
+    const item = await this.requireOwned(memberNo, id);
+    if (item.kind !== QueryExecutionKind.SEMANTIC_QUERY) throw new NotFoundException("查询任务不存在");
+    return this.get(memberNo, id);
+  }
+
+  async semanticCancel(memberNo: string, id: string) {
+    await this.semanticGet(memberNo, id);
+    return this.cancel(memberNo, id);
   }
 
   async assertOwnership(memberNo: string, id: string): Promise<void> {
@@ -144,22 +164,20 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     return this.toResponse(await this.require(id));
   }
 
-  private async createAndSubmit(memberNo: string, pkg: Awaited<ReturnType<PackageService["get"]>>, request: QueryRequest | DimensionValuesRequest | DataQueryRequest | DataDimensionValuesRequest, compiled: CompiledQuery, idempotencyKey?: string, kind: QueryExecutionKind = QueryExecutionKind.SEMANTIC_QUERY, resolvedDates: Array<{field_id:string;start:string;end:string}> = []) {
+  private async createAndSubmit(memberNo: string, pkg: Awaited<ReturnType<PackageService["get"]>>, request: QueryRequest | DimensionValuesRequest | DataQueryRequest | DataDimensionValuesRequest, compiled: CompiledQuery, idempotencyKey?: string, kind: QueryExecutionKind = QueryExecutionKind.SEMANTIC_QUERY, resolvedDates: Array<{field_id:string;start:string;end:string}> = [], admission?:QueryAdmission) {
     requireMemberNo(memberNo);
-    const replay = (existing: Awaited<ReturnType<QueryExecutionService["require"]>>) => {
-      if ((existing.kind && existing.kind !== kind) || !isDeepStrictEqual(existing.request, JSON.parse(JSON.stringify(request)))) {
-        throw new ConflictException("幂等标识已用于其他请求");
-      }
-      return this.toResponse(existing);
-    };
+    const replay = (existing: Awaited<ReturnType<QueryExecutionService["require"]>>) => this.replay(existing, request, kind,admission?.sessionId);
     if (idempotencyKey) {
       const existing = await prisma.queryExecution.findUnique({ where: { ownerMemberNo_idempotencyKey: { ownerMemberNo: memberNo, idempotencyKey } } });
       if (existing) return replay(existing);
     }
     let created;
     try {
-      created = await prisma.queryExecution.create({
+      const create = async (tx:Prisma.TransactionClient) => {
+        if(admission)await admission.check(tx);
+        return tx.queryExecution.create({
         data: {
+          ...(admission?{agentQuerySessionId:admission.sessionId,agentScopeRevision:admission.revision}:{}),
           kind,
           resolvedDates,
           ownerMemberNo: memberNo,
@@ -174,6 +192,8 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
           expiresAt: new Date(Date.now() + resultExpiryMs),
         },
       });
+      };
+      created = admission ? await prisma.$transaction(create) : await create(prisma);
     } catch (error) {
       if (idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const existing = await prisma.queryExecution.findUnique({ where: { ownerMemberNo_idempotencyKey: { ownerMemberNo: memberNo, idempotencyKey } } });
@@ -252,6 +272,12 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     return { result: { columns: resultColumns, rows: rows.slice(0, limit), truncated: truncated || rows.length > limit, result_bytes: byteLength }, snapshotDate };
   }
 
+  private replay(existing: Awaited<ReturnType<QueryExecutionService["require"]>>, request: unknown, kind: QueryExecutionKind, agentSessionId?:string) {
+    if(agentSessionId&&existing.agentQuerySessionId!==agentSessionId)throw new ConflictException("幂等标识已用于其他会话或普通查询，请使用新的请求标识。");
+    if ((existing.kind && existing.kind !== kind) || !isDeepStrictEqual(existing.request, JSON.parse(JSON.stringify(request)))) throw new ConflictException("幂等标识已用于其他请求");
+    return this.toResponse(existing);
+  }
+
   private requestLimit(request: unknown) {
     if (!request || typeof request !== "object") return maxRows;
     const limit = Number((request as { limit?: unknown }).limit);
@@ -281,7 +307,7 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     const date = Date.parse(`${normalized}T00:00:00Z`);
     return Number.isNaN(date) ? null : date;
   }
-  async clientFor(dataSourceId: string, signal?: AbortSignal) {
+  async clientFor(dataSourceId: string, signal: AbortSignal = AbortSignal.timeout(10_000)) {
     const source = await this.datasource.getWithCredentials(dataSourceId);
     this.assertMaxCompute(source.type);
     const config = source.connectionConfig as Record<string, unknown>;

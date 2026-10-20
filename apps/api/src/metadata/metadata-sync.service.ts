@@ -568,6 +568,8 @@ export class MetadataSyncService implements OnModuleInit {
             OR: [
               { name: { contains: q, mode: "insensitive" } },
               { comment: { contains: q, mode: "insensitive" } },
+              { semantic: { is: { businessName: { contains: q, mode: "insensitive" } } } },
+              { semantic: { is: { description: { contains: q, mode: "insensitive" } } } },
             ],
           }
         : {}),
@@ -597,7 +599,7 @@ export class MetadataSyncService implements OnModuleInit {
       where,
       include: {
         metaProject: true,
-        semantic: { select: { id: true, publishedByName: true } },
+        semantic: { select: { id: true, publishedByName: true, businessName: true, description: true } },
         semanticPackage: { select: { id: true } },
         governanceTasks: {
           where: { status: { not: GovernanceTaskStatus.COMPLETED } },
@@ -625,6 +627,8 @@ export class MetadataSyncService implements OnModuleInit {
         name: table.name,
         type: table.type,
         comment: table.comment,
+        businessName: table.semantic?.businessName ?? null,
+        businessDescription: table.semantic?.description ?? null,
         space: table.metaProject.name,
         source: table.metaProject.dataSourceId,
         columnCount: table._count.columns,

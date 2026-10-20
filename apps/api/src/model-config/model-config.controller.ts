@@ -1,6 +1,9 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
 import { ModelConfigService } from "./model-config.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("system.manage")
 @Controller("models")
 export class ModelConfigController {
   constructor(private readonly models: ModelConfigService) {}
@@ -14,5 +17,6 @@ export class ModelConfigController {
   @Patch("model-configs/:id") updateModel(@Param("id") id: string, @Body() body: unknown) { return this.models.updateModel(id, body); }
   @Delete("model-configs/:id") removeModel(@Param("id") id: string) { return this.models.removeModel(id); }
   @Post("model-configs/:id/test") test(@Param("id") id: string) { return this.models.test(id); }
+  @RequirePermission("query.use")
   @Get("available") available() { return this.models.available(); }
 }

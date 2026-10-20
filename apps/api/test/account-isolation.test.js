@@ -17,13 +17,14 @@ const { QueryExecutionService } = require("../dist/query/query-execution.service
 const { createClarification } = require("../dist/ask/ask-clarification");
 
 const now = new Date();
-const profile = member => ({ member_no: member, name: member, phone: member === "A" ? "13800000001" : "13800000002", email: null, avatar_url: null, department: "测试", status: "active" });
+const profile = member => ({ member_no: member, name: member, phone: member === "A" ? "13800000001" : "13800000002", email: null, avatar_url: null, department: "测试", role_code: "USER", role_name: "使用者", status: "active" });
 const session = (id, ownerMemberNo) => ({ id, ownerMemberNo, title: id, tableIds: [], modelConfigId: "model", thinkingLevel: "off", configurationVersion: 1, createdAt: now, updatedAt: now });
 const query = (id, ownerMemberNo) => ({ id, ownerMemberNo, metaTableId: "table", dataSourceId: "source", status: "SUCCEEDED", request: {}, sql: "SELECT 1", contentVersion: "v", snapshotDate: null, result: { columns: [{ name: "数值", type: "INTEGER" }], rows: [["1"]], truncated: false }, submittedAt: now, completedAt: now, expiresAt: new Date(Date.now() + 3600000) });
 const run = (id, askSessionId) => ({ id, askSessionId, status: "SUCCEEDED", idempotencyKey: id, question: id, answer: "回答", modelConfigId: "model", thinkingLevel: "off", tableIds: [], packageVersions: {}, loopVersion: 0, nextMessageSequence: 0, nextEventSequence: 0, startedAt: now, completedAt: now });
 const snapshot = row => ({ query_id: row.id, execution: { id: row.id, status: row.status, result: row.result, content_version: "v", submitted_at: now.toISOString() }, source: { business_name: "业务表", physical_name: "table", project: "project", catalog: "", schema: "" }, query_definition: {}, condition_changes: { inherited: [], changed: [] }, saved_at: now.toISOString() });
 
 async function fixture() {
+  let role = "USER";
   const authRows = new Map();
   const sessions = new Map([["sa", session("sa", "A")], ["sb", session("sb", "B")], ["old", session("old", null)]]);
   const runs = new Map([["ra", run("ra", "sa")], ["rb", run("rb", "sb")], ["old-run", run("old-run", "old")], ["orphan", run("orphan", null)]]);
@@ -96,7 +97,7 @@ async function fixture() {
   const ask = new AskRunService({ resolve: async () => ({ tableIds: ["table"], packages: new Map([["table", pkg]]) }) }, { agentRuntime: async () => runtime }, queryService, events, {});
   ask.onModuleInit = async () => {};
   ask.run = async id => { calls.background.push(id); };
-  const haze = { login: async phone => { const member = phone === profile("A").phone ? "A" : "B"; return { user: profile(member), token: member, expiresIn: 3600 }; }, me: async token => profile(token) };
+  const haze = { login: async phone => { const member = phone === profile("A").phone ? "A" : "B"; return { user: profile(member), token: member, expiresIn: 3600 }; }, me: async token => ({ ...profile(token), role_code: role }) };
   const crypto = { encrypt: value => "encrypted:" + value, decrypt: value => value.slice(10) };
   const module = await Test.createTestingModule({
     controllers: [AuthController, AskController, QueryController],
@@ -110,8 +111,24 @@ async function fixture() {
   let a, b;
   try { a = await login("A"); b = await login("B"); }
   catch (error) { await app.close(); undo.reverse().forEach(fn => fn()); throw error; }
-  return { request, login, a, b, disconnected, ask, queryService, sessions, runs, queries, calls, async close() { await app.close(); undo.reverse().forEach(fn => fn()); } };
+  return { request, login, a, b, setRole(value) { role = value; }, disconnected, ask, queryService, sessions, runs, queries, calls, async close() { await app.close(); undo.reverse().forEach(fn => fn()); } };
 }
+
+test("all four roles including system administrator remain restricted to their own history", async () => {
+  const f = await fixture();
+  try {
+    for (const role of ["SYSTEM_ADMIN", "ADMIN", "DEVELOPER", "USER"]) {
+      f.setRole(role);
+      assert.equal((await f.request("/ask/sessions/sa", f.a)).status, 200);
+      assert.equal((await f.request("/queries/qa/result", f.a)).status, 200);
+      for (const path of ["/ask/sessions/sb", "/ask/sessions/old", "/ask/runs/rb", "/ask/runs/rb/events", "/ask/runs/rb/queries/qb/export", "/queries/qb/result", "/queries/old-query/result"]) {
+        assert.equal((await f.request(path, f.a)).status, 404, `${role} ${path}`);
+      }
+      assert.equal((await f.request("/ask/sessions/sb", f.a, "DELETE")).status, 404);
+      assert.equal((await f.request("/queries/qb/cancel", f.a, "POST")).status, 404);
+    }
+  } finally { await f.close(); }
+});
 
 test("session lists, scoped cursors, create/update/delete and legacy records are isolated", async () => {
   const f = await fixture();

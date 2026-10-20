@@ -5,6 +5,9 @@ import { GovernanceService } from "./governance.service";
 import { CreateWorkspaceInput, FormulaValidationInput, GovernanceWorkspaceService, WorkspaceInput } from "./governance-workspace.service";
 import { GenerationInput, GovernanceGenerationService } from "./governance-generation.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("governance.write")
 @Controller("governance/tasks")
 export class GovernanceController {
   constructor(private readonly governanceService: GovernanceService) {}
@@ -13,6 +16,7 @@ export class GovernanceController {
   list() { return this.governanceService.list(); }
 }
 
+@RequirePermission("governance.write")
 @Controller("governance/workspaces")
 export class GovernanceWorkspaceController {
   constructor(private readonly workspaceService: GovernanceWorkspaceService, private readonly generations: GovernanceGenerationService) {}
@@ -23,6 +27,7 @@ export class GovernanceWorkspaceController {
   @Post("formulas/validate")
   validateFormula(@Body() input: FormulaValidationInput) { return this.workspaceService.validateFormula(input); }
 
+  @RequirePermission("assets.read")
   @Get("by-table/:tableId")
   resolveForTable(@Param("tableId") tableId: string, @Query("task") taskId?: string) { return this.workspaceService.resolveForTable(tableId, taskId); }
 

@@ -1,8 +1,9 @@
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } = require('node:fs');
+const { cpSync, existsSync, mkdtempSync, readdirSync } = require('node:fs');
 const { tmpdir } = require('node:os');
+const { rm } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
 const { PrismaClient } = require('@prisma/client');
@@ -65,7 +66,8 @@ test('PostgreSQL migration deployment and recovery', { skip: !adminUrl, timeout:
     } finally {
       if (db) await db.$disconnect();
       if (created) await admin.$executeRawUnsafe(`DROP DATABASE "${name}" WITH (FORCE)`);
-      rmSync(fixture, { recursive: true, force: true });
+      // Yield so Prisma's Windows filesystem handles can close before retrying.
+      await rm(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   }
 

@@ -4,6 +4,9 @@ import type { AuthRequest } from "../auth/auth.types";
 import { requestMemberNo } from "../auth/member-no";
 import { SavedDataQueryService } from "./saved-data-query.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("query.use")
 @Controller("saved-data-queries")
 export class SavedDataQueryController {
   constructor(private readonly saved: SavedDataQueryService) {}

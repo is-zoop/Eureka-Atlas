@@ -105,7 +105,7 @@ export function AiGenerationDialog({ open, taskId, generation: initialGeneration
         <DialogDescription>{generation ? generation.message : `将为当前已选择的 ${selectedCount} 个字段生成语义建议。`}</DialogDescription>
       </DialogHeader>
       {!generation ? <div className="space-y-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
-        <div><p className="text-sm font-medium text-slate-800">导入参考 Markdown（可选）</p><p className="mt-1 text-xs text-slate-500">仅用于本次生成，不会被保存；支持 .md，最大 1 MB。</p></div>
+        <div><p className="text-sm font-medium text-slate-800">导入业务口径 Markdown（可选）</p><p className="mt-1 text-xs text-slate-500">优先采用文档中明确的名称与口径；未覆盖的字段将结合治理历史和字段注释推导，生成后可人工修正。文档仅用于本次生成，不会被保存；支持 .md，最大 1 MB。</p></div>
         {reference ? <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"><span className="flex min-w-0 items-center gap-2 truncate"><FileText className="h-4 w-4 text-slate-500" />{reference.fileName}</span><Button size="sm" variant="ghost" onClick={() => setReference(null)}>移除</Button></div> : <Button size="sm" variant="outline" onClick={() => input.current?.click()}><FileText className="mr-1.5 h-4 w-4" />选择 Markdown</Button>}
         <input ref={input} type="file" accept=".md,text/markdown" className="hidden" onChange={(event) => void choose(event.target.files?.[0])} />
       </div> : <ol className="space-y-2">{steps.map((step, index) => {

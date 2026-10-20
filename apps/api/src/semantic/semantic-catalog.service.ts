@@ -44,7 +44,8 @@ export class SemanticCatalogService {
 
   async metrics(query: Record<string, unknown>): Promise<unknown> {
     const q = string(query.q); const type = string(query.type); const editStatus = string(query.editStatus); const dataSource = string(query.dataSource); const pageSize = pageValue(query.pageSize, 20); const page = pageValue(query.page, 1);
-    const where: Prisma.SemanticMetricCatalogWhereInput = { status: SemanticCatalogStatus.PUBLISHED, ...(type ? { type: type as SemanticMetricCatalogType } : {}), ...(dataSource ? { dataSource: { contains: dataSource, mode: "insensitive" } } : {}), ...(editStatus === "EDITED" ? { editedAt: { not: null } } : editStatus === "UNEDITED" ? { editedAt: null } : {}), ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }] } : {}) };
+    const aliasIds = q ? await this.aliasMatches("metrics", q) : [];
+    const where: Prisma.SemanticMetricCatalogWhereInput = { status: SemanticCatalogStatus.PUBLISHED, ...(type ? { type: type as SemanticMetricCatalogType } : {}), ...(dataSource ? { dataSource: { contains: dataSource, mode: "insensitive" } } : {}), ...(editStatus === "EDITED" ? { editedAt: { not: null } } : editStatus === "UNEDITED" ? { editedAt: null } : {}), ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }, { id: { in: aliasIds } }] } : {}) };
     const [total, items, dataSources] = await Promise.all([
       prisma.semanticMetricCatalog.count({ where }),
       prisma.semanticMetricCatalog.findMany({ where, include: { _count: { select: { bindings: true } } }, orderBy: { name: "asc" }, skip: (page - 1) * pageSize, take: pageSize }),
@@ -56,7 +57,8 @@ export class SemanticCatalogService {
   }
   async dimensions(query: Record<string, unknown>): Promise<unknown> {
     const q = string(query.q); const editStatus = string(query.editStatus); const dataSource = string(query.dataSource); const pageSize = pageValue(query.pageSize, 20); const page = pageValue(query.page, 1);
-    const where: Prisma.SemanticDimensionCatalogWhereInput = { status: SemanticCatalogStatus.PUBLISHED, ...(dataSource ? { dataSource: { contains: dataSource, mode: "insensitive" } } : {}), ...(editStatus === "EDITED" ? { editedAt: { not: null } } : editStatus === "UNEDITED" ? { editedAt: null } : {}), ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }] } : {}) };
+    const aliasIds = q ? await this.aliasMatches("dimensions", q) : [];
+    const where: Prisma.SemanticDimensionCatalogWhereInput = { status: SemanticCatalogStatus.PUBLISHED, ...(dataSource ? { dataSource: { contains: dataSource, mode: "insensitive" } } : {}), ...(editStatus === "EDITED" ? { editedAt: { not: null } } : editStatus === "UNEDITED" ? { editedAt: null } : {}), ...(q ? { OR: [{ name: { contains: q, mode: "insensitive" } }, { description: { contains: q, mode: "insensitive" } }, { id: { in: aliasIds } }] } : {}) };
     const [total, items, dataSources] = await Promise.all([
       prisma.semanticDimensionCatalog.count({ where }),
       prisma.semanticDimensionCatalog.findMany({ where, include: { _count: { select: { bindings: true } } }, orderBy: { name: "asc" }, skip: (page - 1) * pageSize, take: pageSize }),
@@ -81,6 +83,20 @@ export class SemanticCatalogService {
   }
   async updateMetric(id: string, input: CatalogPatch) { await this.metric(id); return this.metricUpdate(prisma.semanticMetricCatalog, id, input); }
   async updateDimension(id: string, input: CatalogPatch) { await this.dimension(id); return this.dimensionUpdate(id, input); }
+
+  private async aliasMatches(kind: "metrics" | "dimensions", query: string) {
+    const table = kind === "metrics" ? Prisma.sql`semantic_metric_catalog` : Prisma.sql`semantic_dimension_catalog`;
+    // JSON array containment only matches whole aliases. Search each alias as
+    // literal text so partial names work without treating %, _ or quotes as SQL.
+    const matches = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM ${table}
+      WHERE status = 'PUBLISHED' AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(aliases) AS alias(value)
+        WHERE strpos(lower(alias.value), lower(${query})) > 0
+      )
+    `);
+    return matches.map(item => item.id);
+  }
 
   private async metricCatalog(tx: Tx, name: string, description: string) { const normalizedName = nameKey(name); return tx.semanticMetricCatalog.upsert({ where: { normalizedName }, create: { normalizedName, name: name.trim(), description }, update: { name: name.trim(), status: SemanticCatalogStatus.PUBLISHED } }); }
   private async dimensionCatalog(tx: Tx, name: string, description: string) { const normalizedName = nameKey(name); return tx.semanticDimensionCatalog.upsert({ where: { normalizedName }, create: { normalizedName, name: name.trim(), description }, update: { name: name.trim(), status: SemanticCatalogStatus.PUBLISHED } }); }

@@ -249,11 +249,11 @@ export class QueryCompilerService {
 
   private formatDefaultDate(field: SemanticPackage["fields"][number], format: string, value: string) {
     if (!value) throw new BadRequestException("日期范围无效");
-    if (field.normalized_type === "DATE" || field.normalized_type === "DATETIME") return value;
     const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
     const compact = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
     const parts = iso ?? compact;
     if (!parts) throw new BadRequestException(`默认统计日期 ${field.name} 的值必须是有效日期`);
+    if (field.normalized_type === "DATE" || field.normalized_type === "DATETIME") return `${parts[1]}-${parts[2]}-${parts[3]}`;
     if (format === "yyyyMMdd") return `${parts[1]}${parts[2]}${parts[3]}`;
     if (format === "yyyy-MM-dd") return `${parts[1]}-${parts[2]}-${parts[3]}`;
     if (format === "yyyy/MM/dd") return `${parts[1]}/${parts[2]}/${parts[3]}`;

@@ -1,6 +1,9 @@
 import { Body, Controller, Delete, Get, Param, Post } from "@nestjs/common";
 import { SubscriptionAuthService } from "./subscription-auth.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("system.manage")
 @Controller("models/providers/:id/subscription")
 export class SubscriptionAuthController {
   constructor(private readonly subscriptions: SubscriptionAuthService) {}

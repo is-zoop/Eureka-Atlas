@@ -127,7 +127,7 @@ export class ModelConfigService {
 
   async test(id: string) { const model = await this.model(id, true); const startedAt = Date.now(); try { const text = await this.complete(model, "You are a connection test.", "Reply with OK only.", AbortSignal.timeout(20_000), 16); const latencyMs = Date.now() - startedAt; await prisma.modelConfig.update({ where: { id: model.id }, data: { lastTestStatus: "SUCCEEDED", lastTestedAt: new Date(), lastTestLatencyMs: latencyMs, lastTestError: null } }); return { ok: true, latencyMs, responseText: text.slice(0, 300) }; } catch (error) { const latencyMs = Date.now() - startedAt; const message = this.safeError(error); await prisma.modelConfig.update({ where: { id: model.id }, data: { lastTestStatus: "FAILED", lastTestedAt: new Date(), lastTestLatencyMs: latencyMs, lastTestError: message } }); return { ok: false, latencyMs, error: message }; } }
 
-  async completeActive(system: string, user: string, signal?: AbortSignal) { const id = await this.activeId(); if (!id) throw new BadRequestException("Configure and select a current AI suggestion model first"); return this.complete(await this.model(id, true), system, user, signal); }
+  async completeActive(system: string, user: string, signal?: AbortSignal) { const id = await this.activeId(); if (!id) throw new BadRequestException("请先配置并选择用于生成建议的 AI 模型"); return this.complete(await this.model(id, true), system, user, signal); }
 
   /** Runtime data remains inside the API process and is only consumed by Pi Agent. */
   async agentRuntime(requestedModelId?: string) {

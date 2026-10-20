@@ -8,13 +8,13 @@ export class GovernanceService {
   async create(input: CreateGovernanceTaskInput) {
     const tableId = input.tableId?.trim();
     const columnIds = [...new Set((input.columns ?? []).filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))];
-    if (!tableId) throw new BadRequestException("tableId is required");
-    if (!columnIds.length) throw new BadRequestException("Select at least one column");
+    if (!tableId) throw new BadRequestException("请选择需要治理的数据表");
+    if (!columnIds.length) throw new BadRequestException("请至少选择一个字段");
 
     const table = await prisma.metaTable.findUnique({ where: { id: tableId }, select: { id: true } });
-    if (!table) throw new NotFoundException("Table not found");
+    if (!table) throw new NotFoundException("数据表不存在");
     const columns = await prisma.metaColumn.findMany({ where: { id: { in: columnIds }, metaTableId: tableId, status: AssetStatus.ACTIVE }, select: { id: true } });
-    if (columns.length !== columnIds.length) throw new BadRequestException("Selected columns must belong to this active table");
+    if (columns.length !== columnIds.length) throw new BadRequestException("选择的字段必须属于当前表且仍然有效");
 
     const task = await prisma.governanceTask.create({ data: { metaTableId: tableId, selectedColumns: columnIds, createdBy: "local-user" } });
     return { id: task.id, status: task.status, createdAt: task.createdAt };
@@ -27,7 +27,7 @@ export class GovernanceService {
 
   async get(id: string) {
     const task = await prisma.governanceTask.findUnique({ where: { id }, include: { metaTable: { include: { metaProject: true } } } });
-    if (!task) throw new NotFoundException("Governance task not found");
+    if (!task) throw new NotFoundException("治理任务不存在");
     const selectedIds = this.columnIds(task.selectedColumns);
     const columns = await prisma.metaColumn.findMany({ where: { id: { in: selectedIds }, metaTableId: task.metaTableId }, select: { id: true, name: true, dataType: true, comment: true, ordinal: true, isPartition: true } });
     const [aiSuggestionCount, semanticCount, semanticPackage] = await Promise.all([prisma.aiColumnSuggestion.count({ where: { governanceTaskId: id } }), prisma.columnSemantic.count({ where: { metaColumnId: { in: selectedIds } } }), prisma.semanticPackage.findUnique({ where: { metaTableId: task.metaTableId }, select: { id: true } })]);

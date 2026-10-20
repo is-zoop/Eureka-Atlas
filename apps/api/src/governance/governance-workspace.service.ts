@@ -67,7 +67,7 @@ export class GovernanceWorkspaceService {
   ) {}
   async create(input: CreateWorkspaceInput) {
     const tableId = text(input.tableId);
-    if (!tableId) throw new BadRequestException("tableId is required");
+    if (!tableId) throw new BadRequestException("请选择需要治理的数据表");
     const table = await this.table(tableId);
     const draft = await this.normalize(input, table);
     const task = await prisma.governanceTask.create({
@@ -183,7 +183,7 @@ export class GovernanceWorkspaceService {
         select: { id: true },
       });
       if (!task)
-        throw new NotFoundException("Governance task does not belong to this table");
+        throw new NotFoundException("该治理任务不属于当前数据表");
       return this.get(task.id);
     }
     const formal = await prisma.tableSemantic.findUnique({
@@ -200,7 +200,7 @@ export class GovernanceWorkspaceService {
   }
   async validateFormula(input: FormulaValidationInput) {
     const tableId = text(input.tableId);
-    if (!tableId) throw new BadRequestException("tableId is required");
+    if (!tableId) throw new BadRequestException("请选择需要治理的数据表");
     await this.table(tableId);
     const allColumns = await prisma.metaColumn.findMany({
       where: { metaTableId: tableId, status: AssetStatus.ACTIVE },
@@ -209,7 +209,7 @@ export class GovernanceWorkspaceService {
     const selectedIds = this.ids(input.selectedColumns);
     const selected = allColumns.filter((column) => selectedIds.includes(column.id));
     if (selected.length !== new Set(selectedIds).size)
-      throw new BadRequestException("Selected columns must belong to this active table");
+      throw new BadRequestException("选择的字段必须属于当前表且仍然有效");
     return this.formulas.validateAndResolve(
       text(input.formula),
       this.allFormulaFields(selected),
@@ -272,7 +272,7 @@ export class GovernanceWorkspaceService {
       !active.has(draft.table.permissionColumnId)
     )
       throw new BadRequestException(
-        "Permission column must belong to this active table",
+        "权限字段必须属于当前表且仍然有效",
       );
     const publishedAt = new Date();
     await prisma.$transaction(async (tx) => {
@@ -374,7 +374,7 @@ export class GovernanceWorkspaceService {
         metricSuggestions: { orderBy: { createdAt: "asc" } },
       },
     });
-    if (!task) throw new NotFoundException("Governance task not found");
+    if (!task) throw new NotFoundException("治理任务不存在");
     return task;
   }
   private async table(id: string) {
@@ -383,7 +383,7 @@ export class GovernanceWorkspaceService {
       include: { metaProject: true },
     });
     if (!table || table.status !== AssetStatus.ACTIVE)
-      throw new NotFoundException("Active table not found");
+      throw new NotFoundException("数据表不存在或已失效");
     return table;
   }
   private ids(value: unknown) {
@@ -476,9 +476,9 @@ export class GovernanceWorkspaceService {
     const draft = this.normalizeDraft(input, columns, table);
     const options = await this.settings.governanceOptions();
     if (draft.table.dataDomain && !options.dataDomains.includes(draft.table.dataDomain) && draft.table.dataDomain !== text(legacyTable?.dataDomain))
-      throw new BadRequestException("Invalid data domain");
+      throw new BadRequestException("数据域无效，请从已配置的数据域中选择");
     if (draft.table.permissionRelation && !options.permissionRelations.includes(draft.table.permissionRelation) && draft.table.permissionRelation !== text(legacyTable?.permissionRelation))
-      throw new BadRequestException("Invalid permission relation");
+      throw new BadRequestException("权限映射关系无效，请从已配置的关系中选择");
     return draft;
   }
   private normalizeDraft(
@@ -496,16 +496,16 @@ export class GovernanceWorkspaceService {
       ...new Set((input.selectedColumns ?? []).map(text).filter(Boolean)),
     ];
     if (!selectedColumns.length)
-      throw new BadRequestException("Select at least one column");
+      throw new BadRequestException("请至少选择一个字段");
     const allowed = new Set(allColumns.map((column) => column.id));
     if (selectedColumns.some((id) => !allowed.has(id)))
       throw new BadRequestException(
-        "Selected columns must belong to this active table",
+        "选择的字段必须属于当前表且仍然有效",
       );
     const raw = input.columns;
     if (!Array.isArray(raw) || raw.length !== selectedColumns.length)
       throw new BadRequestException(
-        "Draft must include every selected column exactly once",
+        "草稿必须包含全部已选字段，且每个字段只能出现一次",
       );
     const seen = new Set(raw.map((column) => text(column.metaColumnId)));
     if (
@@ -513,12 +513,12 @@ export class GovernanceWorkspaceService {
       selectedColumns.some((id) => !seen.has(id))
     )
       throw new BadRequestException(
-        "Draft columns must match selected columns",
+        "草稿中的字段必须与当前已选字段一致",
       );
     const rawTable = input.table ?? {};
     const dataDomain = text(rawTable.dataDomain) || null;
     const permissionColumnId = text(rawTable.permissionColumnId) || null;
-    const permissionRelation = text(rawTable.permissionRelation) || null;
+    const permissionRelation = permissionColumnId ? text(rawTable.permissionRelation) || null : null;
     const selectedNames = new Set(
       allColumns
         .filter((column) => selectedColumns.includes(column.id))
@@ -533,7 +533,7 @@ export class GovernanceWorkspaceService {
       .filter((name) => selectedNames.has(name));
     if (permissionColumnId && !selectedColumns.includes(permissionColumnId))
       throw new BadRequestException(
-        "Permission column must belong to this active table",
+        "权限字段必须属于当前表且仍然有效",
       );
     const normalized = {
       selectedColumns,
@@ -578,7 +578,7 @@ export class GovernanceWorkspaceService {
     };
     const metricIds = normalized.metrics.map((metric) => metric.id);
     if (metricIds.some((id) => !id) || new Set(metricIds).size !== metricIds.length)
-      throw new BadRequestException("Every metric draft needs a unique id");
+      throw new BadRequestException("每个计算指标都必须有唯一标识，不能留空或重复");
     this.validateMetricReferences(normalized, allColumns);
     return normalized;
   }
@@ -590,32 +590,32 @@ export class GovernanceWorkspaceService {
     if (
       !draft.table.businessName ||
       !draft.table.description ||
-      !draft.table.grain ||
-      !draft.table.permissionColumnId ||
-      !draft.table.permissionRelation
+      !draft.table.grain
     )
       throw new BadRequestException(
-        "Table business name, description, grain, permission column, and permission relation are required before publishing",
+        "发布前请填写业务名称、业务描述和粒度",
       );
+    if (Boolean(draft.table.permissionColumnId) !== Boolean(draft.table.permissionRelation))
+      throw new BadRequestException("权限字段为选填项；填写时必须同时选择权限字段和权限映射关系");
     for (const column of draft.columns) {
       if (
         !column.metricName ||
         !types.has(column.semanticType as ColumnSemanticType)
       )
         throw new BadRequestException(
-          "Every selected column needs metric name and semantic type before publishing",
+          "发布前请为每个已选字段填写名称和语义类型",
         );
       if (
         column.semanticType === ColumnSemanticType.METRIC &&
         !column.aggregation
       )
         throw new BadRequestException(
-          "Metric columns require an aggregation before publishing",
+          "发布前请为指标字段选择聚合方式",
         );
     }
     const names = draft.metrics.map((metric) => metric.name);
     if (names.some((name) => !name) || new Set(names).size !== names.length)
-      throw new BadRequestException("Derived metric names must be present and unique");
+      throw new BadRequestException("计算指标名称不能为空或重复");
     return draft.metrics.map((metric) => ({
       draft: metric,
       resolved: this.formulas.validateAndResolve(

@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import type { AuthUser } from "@eureka-atlas/types";
+import { canAccessPage, type AuthUser } from "@eureka-atlas/types";
 import { usePathname } from "next/navigation";
 import {
   Bell,
+  Plug,
   ClipboardCheck,
   Database,
   LayoutDashboard,
@@ -65,6 +66,7 @@ const navigation = [
   },
 ];
 const managementNavigation = [
+  { href: "/integrations/api", label: "集成中心", icon: Plug, matches: (path: string) => path === "/integrations" || path.startsWith("/integrations/") },
   { href: "/assets/sources", label: "数据源", icon: Database, matches: (path: string) => path.startsWith("/assets/sources") },
   { href: "/models", label: "AI 配置", icon: Bot, matches: (path: string) => path.startsWith("/models") },
   { href: "/settings", label: "系统设置", icon: Settings, matches: (path: string) => path.startsWith("/settings") },
@@ -72,7 +74,9 @@ const managementNavigation = [
 
 export function AppShell({ children, user }: { children: React.ReactNode; user: AuthUser }) {
   const pathname = usePathname();
-  const current = navigation.find((item) => item.matches(pathname));
+  const visibleNavigation = navigation.filter((item) => canAccessPage(user.role_code, item.href));
+  const visibleManagement = managementNavigation.filter((item) => canAccessPage(user.role_code, item.href));
+  const current = [...visibleNavigation, ...visibleManagement].find((item) => item.matches(pathname));
   return (
     <div className="min-h-screen bg-white text-slate-900">
       <aside className="fixed bottom-0 left-0 z-20 w-60 border-r border-slate-200/80 bg-white px-3 pt-3 pb-2 lg:inset-y-0 lg:flex lg:flex-col lg:pt-5">
@@ -82,7 +86,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             <p className="mt-1 text-xs text-slate-400">数据语义治理平台</p>
           </Link>
           <nav className="space-y-1">
-            {navigation.map((item) => {
+            {visibleNavigation.map((item) => {
               const Icon = item.icon;
               const active = item.matches(pathname);
               return (
@@ -102,17 +106,17 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               );
             })}
           </nav>
-          <div className="mt-6 border-t border-slate-100 pt-5">
+          {visibleManagement.length > 0 && <div className="mt-6 border-t border-slate-100 pt-5">
             <p className="mb-2 px-3 text-[11px] font-medium tracking-wide text-slate-400">
               管理
             </p>
             <nav className="space-y-1">
-              {managementNavigation.map((item) => {
+              {visibleManagement.map((item) => {
                 const Icon = item.icon;
                 return <Link key={item.href} href={item.href} className={cn("flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors", item.matches(pathname) ? "bg-slate-100 font-medium text-slate-950" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900")}><Icon className="h-4 w-4" />{item.label}</Link>;
               })}
             </nav>
-          </div>
+          </div>}
           <div className="mt-6 border-t border-slate-100 pt-5">
             <p className="px-3 text-[11px] font-medium tracking-wide text-slate-400">数据治理</p>
             <p className="mt-2 px-3 text-xs leading-5 text-slate-400">
@@ -130,7 +134,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               <p className="text-sm text-slate-500">数据治理中心</p>
               <span className="text-slate-300">/</span>
               <p className="text-sm font-medium text-slate-800">
-                {current?.label ?? "工作区"}
+                {pathname === "/profile" ? "个人中心" : current?.label ?? "工作区"}
               </p>
             </div>
             <div className="flex items-center gap-3">

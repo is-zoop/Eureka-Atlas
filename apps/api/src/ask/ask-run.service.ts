@@ -11,7 +11,7 @@ import { finalCharts, validateCharts } from "./ask-chart";
 import { AskEventService } from "./ask-event.service";
 import { buildAskSystemPrompt } from "./ask-prompt";
 import { SystemSettingsService } from "../system-settings/system-settings.service";
-import { AskScope, AskScopeService } from "./ask-scope.service";
+import { SemanticScope, SemanticScopeService } from "../semantic/semantic-scope.service";
 import { completeToolHistory, type AskHistory } from "./ask-history";
 import { AskContextCompactor } from "./ask-compaction";
 import { askQueryParameters, askSearchParameters, scopeDataDomains } from "./ask-query-schema";
@@ -34,7 +34,7 @@ type LiveRun = { finished: Promise<void>; abort: AbortController; agent?: any; g
 export class AskRunService implements OnModuleInit {
   private live = new Map<string, LiveRun>();
   constructor(
-    private readonly scopeService: AskScopeService,
+    private readonly scopeService: SemanticScopeService,
     private readonly models: ModelConfigService,
     private readonly queries: QueryExecutionService,
     private readonly events: AskEventService,
@@ -376,7 +376,7 @@ export class AskRunService implements OnModuleInit {
     } finally { clearTimeout(timeout); if (this.live.get(runId) === live) this.live.delete(runId); finish(); }
   }
 
-  private tools(runId: string, memberNo: string, live: LiveRun, Type: any, scope: AskScope) {
+  private tools(runId: string, memberNo: string, live: LiveRun, Type: any, scope: SemanticScope) {
     const queryParameters = askQueryParameters(Type);
     const searchParameters = askSearchParameters(Type, scopeDataDomains(scope.packages.values()));
     const textResult = (value: unknown, terminate = false) => ({ content: [{ type: "text", text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) });
@@ -449,7 +449,7 @@ export class AskRunService implements OnModuleInit {
     return { inherited, changed };
   }
 
-  private async messageHistory(run: { askSessionId: string | null; tableIds: unknown }, scope: AskScope): Promise<AskHistory> {
+  private async messageHistory(run: { askSessionId: string | null; tableIds: unknown }, scope: SemanticScope): Promise<AskHistory> {
     if (!run.askSessionId) return { messages: [], references: [] };
     const historical = await prisma.askRun.findMany({
       where: { askSessionId: run.askSessionId, status: "SUCCEEDED" }, orderBy: [{ startedAt: "asc" }, { id: "asc" }],
@@ -504,7 +504,7 @@ export class AskRunService implements OnModuleInit {
 
   private querySummary(execution: QueryExecution) { const rows = execution.result?.rows ?? []; const excerpt: typeof rows = []; let bytes = 2; for (const row of rows.slice(0, 100)) { const next = Buffer.byteLength(JSON.stringify(row), "utf8") + (excerpt.length ? 1 : 0); if (bytes + next > 65536) break; excerpt.push(row); bytes += next; } return { query_id: execution.id, status: execution.status, columns: execution.result?.columns ?? [], rows: excerpt, excerpt_complete: rows.length === excerpt.length, result_complete: !execution.result?.truncated, row_count_returned: rows.length, content_version: execution.content_version, snapshot_date: execution.snapshot_date }; }
   private textFromAgent(agent: any) { const message = [...(agent.state?.messages ?? [])].reverse().find((item: any) => item.role === "assistant"); return (message?.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("").trim(); }
-  private async systemPrompt(scope: AskScope) { const setting = await this.settings.askPrompt(); return buildAskSystemPrompt(setting.prompt, scope.tableIds.length) + "\n\n当前可查询表的真实数据域：" + JSON.stringify(scopeDataDomains(scope.packages.values())) + "。search_semantic_assets.data_domain 只能使用这些值；不确定时省略。不要用平台名、店铺名猜测数据域；相关检索词放在 keywords 中。"; }
+  private async systemPrompt(scope: SemanticScope) { const setting = await this.settings.askPrompt(); return buildAskSystemPrompt(setting.prompt, scope.tableIds.length) + "\n\n当前可查询表的真实数据域：" + JSON.stringify(scopeDataDomains(scope.packages.values())) + "。search_semantic_assets.data_domain 只能使用这些值；不确定时省略。不要用平台名、店铺名猜测数据域；相关检索词放在 keywords 中。"; }
   private runIncludes() { return { events: { where: { type: "processing" }, orderBy: { sequence: "asc" as const } }, messages: { orderBy: { sequence: "asc" as const } }, queries: { include: { queryExecution: true }, orderBy: { createdAt: "asc" as const } }, } as const; }
   private runResponse(run: any, saved: Array<{ queryExecutionId: string; createdAt: Date }> = []): AskRun { const finalIds = finalQueryIds(run.messages ?? [], saved.map((item) => item.queryExecutionId)); const clarification = readClarification(run.clarification, string(run.clarificationId)); return { id: run.id, session_id: run.askSessionId ?? null, status: run.status, question: run.question, answer: run.answer, model_id: run.modelConfigId, model_display_name: run.modelDisplayName ?? null, model_provider_name: run.modelProviderName ?? null, event_cursor: run.nextEventSequence, processing: processingDetails(run.nextMessageSequence, run.events ?? [], run.status, run.completedAt, (run.messages ?? []).filter((message: any) => message.role === "TOOL").map((message: any) => string(message.content?.toolCallId)).filter(Boolean)), thinking_level: thinkingLevel(run.thinkingLevel), table_ids: asStringList(run.tableIds), clarification, error: run.error, started_at: run.startedAt.toISOString(), completed_at: run.completedAt?.toISOString() ?? null, condition_changes: run.conditionChanges && typeof run.conditionChanges === "object" ? run.conditionChanges as AskConditionChanges : defaultChanges(), messages: (run.messages ?? []).map((message: any) => ({ id: message.id, sequence: message.sequence, role: message.role, content: message.content, created_at: message.createdAt.toISOString() })), queries: (run.queries ?? []).map((link: any) => ({ id: link.queryExecution.id, status: link.queryExecution.status, table_id: link.queryExecution.metaTableId, content_version: link.queryExecution.contentVersion, snapshot_date: link.queryExecution.snapshotDate, error: link.queryExecution.error })), final_query_ids: finalIds, charts: finalCharts(run.messages ?? [], finalIds), result_summaries: saved.map((item) => ({ query_id: item.queryExecutionId, saved_at: item.createdAt.toISOString() })) }; }
   private sessionResponse(session: any): AskSession { return { id: session.id, title: session.title, table_ids: asStringList(session.tableIds), model_id: session.modelConfigId, thinking_level: thinkingLevel(session.thinkingLevel), configuration_version: session.configurationVersion, created_at: session.createdAt.toISOString(), updated_at: session.updatedAt.toISOString(), active_run: session.runs?.[0] ? { id: session.runs[0].id, status: session.runs[0].status, question: session.runs[0].question } : null }; }

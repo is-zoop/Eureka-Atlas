@@ -720,7 +720,7 @@ function WorkspaceContent() {
                       </Field>
                       {allColumns.some((column) => column.isPartition) && <Field className="min-w-0 order-2"><FieldLabel>存储方式</FieldLabel><div className="space-y-1"><Combobox value={draft.table.queryConfig.storage ?? ""} onValueChange={(storage) => updateQueryConfig({ ...draft.table.queryConfig, storage: storage ? storage as QueryConfig["storage"] : null })} placeholder="选择存储方式" options={[{ value: "", label: "未设置" }, { value: "DATE_INCREMENTAL", label: "日期增量" }, { value: "FULL_SNAPSHOT", label: "全量快照" }]} />{showAiSuggestions && workspace?.ai && <AiHint value={workspace.ai.table.queryConfig.storage ? storageLabels[workspace.ai.table.queryConfig.storage] : null} emptyText="AI 未能判断，请人工选择" onAdopt={adoptStorageSuggestion} />}</div></Field>}
                       <Field className="min-w-0 order-1">
-                        <FieldLabel>权限字段</FieldLabel>
+                        <FieldLabel>权限字段（选填）</FieldLabel>
                         <div className="min-w-0 space-y-1"><div className="flex h-10 min-w-0 rounded-md border border-slate-300 bg-white shadow-sm">
                           <Combobox
                             className="h-full min-w-0 flex-1"
@@ -731,9 +731,9 @@ function WorkspaceContent() {
                               updateTable("permissionRelation", null);
                               setPermissionRelationOpen(Boolean(value));
                             }}
-                            placeholder="选择权限字段"
+                            placeholder="选择权限字段（可不设置）"
                             searchPlaceholder="选择权限字段"
-                            options={selectedFieldOptions}
+                            options={[{ value: "", label: "不设置权限字段" }, ...selectedFieldOptions]}
                           />
                           {draft.table.permissionRelation && (
                             <button
@@ -744,7 +744,7 @@ function WorkspaceContent() {
                               {draft.table.permissionRelation}
                             </button>
                           )}
-                        </div>{showAiSuggestions && workspace?.ai && <AiHint value={workspace?.ai?.table.permissionColumnId && workspace?.ai?.table.permissionRelation ? `${selectedFieldOptions.find((option) => option.value === workspace?.ai?.table.permissionColumnId)?.label ?? ""} · ${workspace?.ai?.table.permissionRelation}` : null} emptyText="AI 未能判断，请人工维护" onAdopt={adoptPermissionSuggestion} />}</div>
+                        </div>{showAiSuggestions && workspace?.ai && <AiHint value={workspace?.ai?.table.permissionColumnId && workspace?.ai?.table.permissionRelation ? `${selectedFieldOptions.find((option) => option.value === workspace?.ai?.table.permissionColumnId)?.label ?? ""} · ${workspace?.ai?.table.permissionRelation}` : null} emptyText="未设置权限字段，可按需维护" onAdopt={adoptPermissionSuggestion} />}</div>
                       </Field>
                       <Field className="order-4 md:col-span-2">
                         <FieldLabel>业务描述</FieldLabel>

@@ -1,10 +1,10 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { AskScopeService } = require("../dist/ask/ask-scope.service");
+const { SemanticScopeService } = require("../dist/semantic/semantic-scope.service");
 const { AskRunService } = require("../dist/ask/ask-run.service");
 const { prisma } = require("@eureka-atlas/database");
 
-const scopeService = (ids) => new AskScopeService(
+const scopeService = (ids) => new SemanticScopeService(
   { list: async () => ({ items: ids.map((id) => ({ id })) }) },
   { get: async (id) => ({ table: { id }, content_version: `version-${id}` }) },
 );

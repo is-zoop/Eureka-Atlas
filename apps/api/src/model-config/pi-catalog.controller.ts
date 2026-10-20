@@ -1,6 +1,9 @@
 import { Body, Controller, Get, Post } from "@nestjs/common";
 import { PiCatalogService } from "./pi-catalog.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("system.manage")
 @Controller("models/pi-catalog")
 export class PiCatalogController {
   constructor(private readonly catalog: PiCatalogService) {}

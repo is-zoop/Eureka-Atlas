@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import type { AuthUser } from "@eureka-atlas/types";
 import { api, invalidateApiRequests, AUTH_ACCOUNT_CHANGED_EVENT, AUTH_UNAUTHORIZED_EVENT } from "./api";
+import { resetListViews } from "./list-view-state";
 
 type AuthState = { status: "loading" | "authenticated" | "unauthenticated" | "unavailable"; user: AuthUser | null; error: string | null };
 const initialState: AuthState = { status: "loading", user: null, error: null };
@@ -19,6 +20,7 @@ export const getAuthSnapshot = () => state;
 export const useAuth = () => useSyncExternalStore(subscribe, getAuthSnapshot, () => initialState);
 
 export function clearAuth() {
+  resetListViews();
   version++;
   invalidateApiRequests();
   refreshController?.abort();
@@ -33,7 +35,8 @@ export function notifySessionExpired() {
 }
 
 function acceptUser(user: AuthUser) {
-  if (state.user?.member_no !== user.member_no) {
+  if (state.user?.member_no !== user.member_no || state.user?.role_code !== user.role_code) {
+    resetListViews();
     invalidateApiRequests();
     window.dispatchEvent(new Event(AUTH_ACCOUNT_CHANGED_EVENT));
   }
@@ -44,7 +47,9 @@ function acceptUser(user: AuthUser) {
 export function watchAuthChanges(): () => void {
   const channel = new BroadcastChannel("eureka-atlas:auth");
   authChannel = channel;
-  channel.onmessage = () => {
+  channel.onmessage = (event) => {
+    if (event.data === "profile-updated") { void refreshAuth(); return; }
+    resetListViews();
     version++;
     refreshController?.abort();
     refreshController = undefined;
@@ -57,10 +62,10 @@ export function watchAuthChanges(): () => void {
   return () => { if (authChannel === channel) authChannel = undefined; channel.close(); };
 }
 
-function announceAuthChange() {
-  if (authChannel) { authChannel.postMessage("changed"); return; }
+function announceAuthChange(message: "changed" | "profile-updated" = "changed") {
+  if (authChannel) { authChannel.postMessage(message); return; }
   const channel = new BroadcastChannel("eureka-atlas:auth");
-  channel.postMessage("changed");
+  channel.postMessage(message);
   channel.close();
 }
 
@@ -96,14 +101,24 @@ export async function login(phone: string, password: string) {
   pending = work.then(() => {}, () => {});
   try {
     const user = await work;
-    if (ticket === version) { acceptUser(user); announceAuthChange(); }
+    if (ticket === version) { resetListViews(); acceptUser(user); announceAuthChange(); }
   } finally {
     if (ticket === version) pending = undefined;
   }
 }
 
-export async function logout() {
-  await api("/auth/logout", { method: "POST" });
+export function updateAuthUser(user: AuthUser) {
+  if (state.status !== "authenticated" || state.user?.member_no !== user.member_no) return;
+  acceptUser(user);
+  announceAuthChange("profile-updated");
+}
+
+export function endSession() {
   notifySessionExpired();
   announceAuthChange();
+}
+
+export async function logout() {
+  await api("/auth/logout", { method: "POST" });
+  endSession();
 }

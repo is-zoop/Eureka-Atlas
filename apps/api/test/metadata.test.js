@@ -77,8 +77,8 @@ test("signs the complete MaxCompute /api resource path", async () => {
 test("asset list and detail use the latest semantic publisher name, never metadata updater or local-user", async () => {
   const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
   const semantics = [
-    { id: "semantic-A", publishedBy: "member-B", publishedByName: "发布人乙" },
-    { id: "semantic-old", publishedBy: "local-user", publishedByName: null },
+    { id: "semantic-A", publishedBy: "member-B", publishedByName: "发布人乙", businessName: "订单明细", description: "已发布的订单业务描述" },
+    { id: "semantic-old", publishedBy: "local-user", publishedByName: null, businessName: "历史订单", description: "" },
     null,
   ];
   const rows = semantics.map((semantic, i) => ({
@@ -92,6 +92,8 @@ test("asset list and detail use the latest semantic publisher name, never metada
     findMany: async query => {
       if (query.select?.type) return [{ type: "MANAGED_TABLE" }];
       assert.equal(query.include.semantic.select.publishedByName, true);
+      assert.equal(query.include.semantic.select.businessName, true);
+      assert.equal(query.include.semantic.select.description, true);
       return rows;
     },
     findUnique: async query => {
@@ -105,6 +107,8 @@ test("asset list and detail use the latest semantic publisher name, never metada
     const service = new MetadataSyncService({});
     const list = await service.listTables({});
     assert.deepEqual(list.items.map(item => item.lastUpdatedBy), ["发布人乙", null, null]);
+    assert.deepEqual(list.items.map(item => item.businessName), ["订单明细", "历史订单", null]);
+    assert.deepEqual(list.items.map(item => item.businessDescription), ["已发布的订单业务描述", "", null]);
     for (const [i, name] of ["发布人乙", null, null].entries()) {
       const detail = await service.getTable("table-" + i);
       assert.equal(detail.lastUpdatedBy, name);
@@ -159,6 +163,36 @@ test("paginates active tables and applies keyword, data space, and type filters"
   } finally { Object.assign(prisma, originals); }
 });
 
+test("searches published business names, descriptions, physical names and comments with the same count and item filters", async () => {
+  const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
+  const counts = [];
+  const queries = [];
+  prisma.metaTable = {
+    count: async ({ where }) => { counts.push(where); return 0; },
+    findMany: async query => { if (!query.select?.type) queries.push(query.where); return []; },
+  };
+  prisma.metaProject = { findMany: async () => [] };
+  prisma.dataSource = { findMany: async () => [] };
+  try {
+    const service = new MetadataSyncService({});
+    await service.listTables({ q: "  Sales订单  ", space: "dw", sourceId: "source", type: "MANAGED_TABLE", governanceStatus: "COMPLETED" });
+    assert.deepEqual(counts[0].OR, [
+      { name: { contains: "Sales订单", mode: "insensitive" } },
+      { comment: { contains: "Sales订单", mode: "insensitive" } },
+      { semantic: { is: { businessName: { contains: "Sales订单", mode: "insensitive" } } } },
+      { semantic: { is: { description: { contains: "Sales订单", mode: "insensitive" } } } },
+    ]);
+    assert.deepEqual(queries[0], counts[0]);
+    assert.deepEqual(counts[0].metaProject, { status: "ACTIVE", name: "dw", dataSourceId: "source" });
+    assert.equal(counts[0].status, "ACTIVE");
+    assert.equal(counts[0].type, "MANAGED_TABLE");
+    assert.deepEqual(counts[0].semantic, { isNot: null });
+    await service.listTables({ q: "   " });
+    assert.equal("OR" in counts[1], false);
+    assert.deepEqual(queries[1], counts[1]);
+  } finally { Object.assign(prisma, originals); }
+});
+
 test("returns an empty first page for a query with no matching tables", async () => {
   const originals = { metaTable: prisma.metaTable, metaProject: prisma.metaProject, dataSource: prisma.dataSource };
   prisma.metaTable = { count: async () => 0, findMany: async (query) => query.select?.type ? [] : [] };
@@ -181,6 +215,8 @@ test("marks an unpublished table with an active governance task as a draft", asy
   try {
     const result = await new MetadataSyncService({}).listTables({ governanceStatus: "DRAFT" });
     assert.equal(result.items[0].governanceStatus, "DRAFT");
+    assert.equal(result.items[0].businessName, null);
+    assert.equal(result.items[0].businessDescription, null);
   } finally { Object.assign(prisma, originals); }
 });
 

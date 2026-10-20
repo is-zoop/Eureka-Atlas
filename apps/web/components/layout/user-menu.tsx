@@ -1,9 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { AuthUser } from "@eureka-atlas/types";
-import { LogOut, MoreHorizontal } from "lucide-react";
+import { LogOut, MoreHorizontal, UserRound } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -14,7 +15,7 @@ import {
 import { loginLocation } from "@/lib/login-location";
 import { logout } from "@/lib/auth";
 
-// Adapted from Haze's Dashboard sidebar footer; only Eureka logout is exposed.
+// Adapted from Haze's Dashboard sidebar footer.
 export function UserMenu({ user }: { user: AuthUser }) {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -64,7 +65,7 @@ export function UserMenu({ user }: { user: AuthUser }) {
             <MoreHorizontal size={14} className="ml-1 shrink-0 text-slate-500" aria-hidden="true" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" alignOffset={-4} side="right" sideOffset={0} className="w-56 rounded-xl p-1">
+        <DropdownMenuContent align="start" side="top" sideOffset={8} collisionPadding={12} className="w-56 rounded-xl p-1">
           <div className="mb-1 flex items-center gap-2.5 border-b border-slate-100 p-2.5">
             <Avatar className="h-8 w-8 border border-neutral-200/80">
               {user.avatar_url && <AvatarImage src={user.avatar_url} alt={user.name} />}
@@ -81,6 +82,9 @@ export function UserMenu({ user }: { user: AuthUser }) {
               </p>
             </div>
           </div>
+          <DropdownMenuItem asChild disabled={loggingOut} className="gap-2.5 p-2">
+            <Link href="/profile"><UserRound size={14} aria-hidden="true" /><span>个人中心</span></Link>
+          </DropdownMenuItem>
           <DropdownMenuItem
             disabled={loggingOut}
             onSelect={() => { void signOut(); }}

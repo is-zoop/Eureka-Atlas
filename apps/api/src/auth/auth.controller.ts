@@ -3,7 +3,9 @@ import type { Response } from "express";
 import { AuthService } from "./auth.service";
 import type { AuthRequest } from "./auth.types";
 import { Public } from "./public.decorator";
+import { RequirePermission } from "./permission.decorator";
 
+@RequirePermission("assets.read")
 @Controller("auth")
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

@@ -4,8 +4,13 @@ ENV PATH=/pnpm:$PATH
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates openssl \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install --global pnpm@11.19.0
+    && rm -rf /var/lib/apt/lists/*
+# Keep network package installation separate so certificate work is cached and
+# npm reports the actual request or lifecycle script instead of appearing idle.
+RUN node --version && npm --version \
+    && npm install --global pnpm@11.19.0 \
+        --no-audit --no-fund --loglevel=verbose --foreground-scripts \
+        --fetch-retries=1 --fetch-timeout=60000
 
 FROM base AS workspace
 # Native Node dependencies are compiled for Linux, never copied from Windows.
@@ -18,13 +23,27 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/config/package.json packages/config/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/types/package.json packages/types/package.json
+# Prisma engines are downloaded separately from npm. Override only at build time
+# when the official binary host is unreachable; keep TLS and checksum validation.
+ARG PRISMA_ENGINES_MIRROR=https://binaries.prisma.sh
+# These options apply to pnpm registry requests, not npm bootstrap or Prisma downloads.
+# The official Node image already includes matching headers under /usr/local.
+# Compile native addons against them instead of downloading the headers again.
 RUN --mount=type=cache,id=atlas-pnpm,target=/pnpm/store \
-    pnpm --filter @eureka-atlas/api... --filter @eureka-atlas/web... install --frozen-lockfile --store-dir /pnpm/store
+    test -f /usr/local/include/node/node.h \
+    && test -f /usr/local/include/node/common.gypi \
+    && test -f /usr/local/include/node/config.gypi \
+    && npm_package_config_node_gyp_nodedir=/usr/local \
+    PRISMA_ENGINES_MIRROR="$PRISMA_ENGINES_MIRROR" DEBUG="prisma:download,prisma:fetch-engine*" \
+    pnpm --reporter=append-only --filter @eureka-atlas/api... --filter @eureka-atlas/web... install --frozen-lockfile --store-dir /pnpm/store \
+        --network-concurrency=4 --fetch-timeout=180000 --fetch-retries=3 \
+        --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 COPY apps/api ./apps/api
 COPY apps/web ./apps/web
 COPY packages ./packages
 # Generation needs a URL, but does not connect to a database. No secret build args.
-RUN DATABASE_URL=postgresql://atlas:build-only@127.0.0.1:5432/atlas \
+RUN PRISMA_ENGINES_MIRROR="$PRISMA_ENGINES_MIRROR" DEBUG="prisma:download,prisma:fetch-engine*" \
+    DATABASE_URL=postgresql://atlas:build-only@127.0.0.1:5432/atlas \
     pnpm --filter @eureka-atlas/database exec prisma generate --schema prisma/schema.prisma \
     && pnpm --filter @eureka-atlas/database build
 

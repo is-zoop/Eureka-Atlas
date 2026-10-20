@@ -298,6 +298,37 @@ export type AskSessionCreateRequest = { title?: string; table_ids?: string[]; mo
 export type AskSessionUpdateRequest = { title?: string; table_ids?: string[]; model_id?: string; thinking_level?: AskThinkingLevel; expected_configuration_version: number };
 export type AskRunCreateRequest = { idempotency_key: string; question: string; expected_configuration_version: number };
 export type AskClarificationRequest = AskClarificationResponse & { clarification_id: string };
+export type AuthRole = "SYSTEM_ADMIN" | "ADMIN" | "DEVELOPER" | "USER";
+export type AtlasPermission = "assets.read" | "governance.write" | "system.manage" | "query.use" | "api.access";
+
+const rolePermissions: Record<AuthRole, readonly AtlasPermission[]> = {
+  SYSTEM_ADMIN: ["assets.read", "governance.write", "system.manage", "query.use", "api.access"],
+  ADMIN: ["assets.read", "governance.write", "query.use", "api.access"],
+  DEVELOPER: ["assets.read", "query.use"],
+  USER: ["assets.read", "query.use"],
+};
+
+export function isAuthRole(role: unknown): role is AuthRole {
+  return typeof role === "string" && Object.hasOwn(rolePermissions, role);
+}
+
+export function hasPermission(role: unknown, permission: AtlasPermission): boolean {
+  return isAuthRole(role) && rolePermissions[role].includes(permission);
+}
+
+export function canAccessPage(role: unknown, pathname: string): boolean {
+  if (!isAuthRole(role)) return false;
+  if (pathname === "/" || pathname === "/profile") return true;
+  const matches = (base: string) => pathname === base || pathname.startsWith(`${base}/`);
+  if (["/assets/sources", "/models", "/settings"].some(matches)) return hasPermission(role, "system.manage");
+  if (pathname === "/integrations/plugins/data-selector") return hasPermission(role, "query.use");
+  if (matches("/integrations")) return hasPermission(role, "api.access");
+  if (matches("/governance")) return hasPermission(role, "governance.write");
+  if (["/assets/tables", "/semantic/metrics", "/semantic/dimensions"].some(matches)) return hasPermission(role, "assets.read");
+  if (["/query/ask", "/query/data"].some(matches)) return hasPermission(role, "query.use");
+  return false;
+}
+
 export interface AuthUser {
   member_no: string;
   name: string;
@@ -305,8 +336,34 @@ export interface AuthUser {
   email: string | null;
   avatar_url: string | null;
   department: string;
+  role_code: AuthRole;
+  role_name: string;
   status: "active";
 }
+
+export type PersonalCredential = {
+  id: number;
+  name: string;
+  masked_key: string;
+  created_at: string;
+  updated_at: string;
+};
+export type PersonalCredentialSecret = PersonalCredential & { key: string };
+
+export type ExternalQueryRequest = QueryRequest & { content_version: string; idempotency_key: string };
+export type ExternalDimensionValuesRequest = DimensionValuesRequest & { content_version: string; idempotency_key: string };
+export type ExternalQueryTask = Omit<QueryExecution, "result"> & { expires_at: string };
+export type ExternalResponse<T> = { data: T; request_id: string };
+export type ExternalErrorResponse = { error: { code: string; message: string }; request_id: string };
+export type ExternalApiOperation = {
+  id: string; title: string; description: string; method: "GET" | "POST"; path: string; success_status: number;
+  request_schema: Record<string, unknown>; params_schema: Record<string, unknown>; response_schema: Record<string, unknown>;
+  request_example: Record<string, unknown>; params_example: Record<string, string>; response_example: unknown; notes: string[];
+};
+export type ExternalApiCatalog = {
+  title: string; version: string; base_path: string; authentication: string; workflow: string[];
+  limits: Record<string, number>; errors: Array<{ status: number; code: string; description: string }>; operations: ExternalApiOperation[];
+};
 
 export type DataQueryMode = "DETAIL" | "AGGREGATE";
 export type DataQueryFilterLogic = "AND" | "OR";

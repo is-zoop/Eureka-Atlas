@@ -5,6 +5,9 @@ import {
   UpdateDataSourceInput,
 } from "./datasource.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("system.manage")
 @Controller("datasources")
 export class DatasourceController {
   constructor(private readonly datasourceService: DatasourceService) {}

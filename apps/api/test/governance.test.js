@@ -23,10 +23,10 @@ test("creates repeated governance tasks and records normalized selected columns"
 
 test("rejects empty and foreign column selections", async () => {
   const service = new GovernanceService();
-  await assert.rejects(() => service.create({ tableId: "table-1", columns: [] }), /Select at least one column/);
+  await assert.rejects(() => service.create({ tableId: "table-1", columns: [] }), /请至少选择一个字段/);
   prisma.metaTable = { findUnique: async () => activeTable };
   prisma.metaColumn = { findMany: async () => [] };
-  try { await assert.rejects(() => service.create({ tableId: "table-1", columns: ["other-table-column"] }), /Selected columns/); } finally { restore(); }
+  try { await assert.rejects(() => service.create({ tableId: "table-1", columns: ["other-table-column"] }), /选择的字段必须属于当前表/); } finally { restore(); }
 });
 
 test("lists newest tasks first and returns selected detail fields in saved order", async () => {

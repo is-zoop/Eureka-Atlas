@@ -623,7 +623,42 @@ model QueryResultChunk {
   @@map("query_result_chunk")
 }
 
+model AgentQuerySession {
+  id               String   @id @default(uuid())
+  ownerMemberNo    String
+  scopeMode        String   @default("ALL")
+  selectedTableIds Json     @default("[]")
+  revision         Int      @default(0)
+  clientConversationId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  queries          QueryExecution[]
+  selectionAccess  AgentSelectionAccess?
+
+  @@unique([ownerMemberNo, clientConversationId])
+  @@index([ownerMemberNo, updatedAt])
+  @@map("agent_query_session")
+}
+
+model AgentSelectionAccess {
+  id                  String @id @default(uuid())
+  agentQuerySessionId String @unique
+  agentQuerySession   AgentQuerySession @relation(fields: [agentQuerySessionId], references: [id], onDelete: Cascade)
+  credentialEncrypted String?
+  credentialDigest    String?
+  grantHash           String?
+  grantExpiresAt      DateTime?
+  epoch               Int @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("agent_selection_access")
+}
+
 model QueryExecution {
+  agentQuerySessionId String?
+  agentScopeRevision  Int?
+  agentQuerySession   AgentQuerySession? @relation(fields: [agentQuerySessionId], references: [id], onDelete: SetNull)
   ownerMemberNo  String?
   id             String               @id @default(cuid())
   metaTableId    String
@@ -655,6 +690,7 @@ model QueryExecution {
   @@index([status])
   @@unique([ownerMemberNo, idempotencyKey])
   @@index([ownerMemberNo, submittedAt])
+  @@index([agentQuerySessionId, submittedAt])
   @@index([metaTableId, submittedAt])
   @@map("query_execution")
 }

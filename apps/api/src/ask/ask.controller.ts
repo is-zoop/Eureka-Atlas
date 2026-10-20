@@ -10,6 +10,9 @@ import { ForbiddenException, NotFoundException, UnauthorizedException } from "@n
 import type { AuthRequest } from "../auth/auth.types";
 import { requestMemberNo } from "../auth/member-no";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("query.use")
 @Controller("ask")
 export class AskController {
   constructor(private readonly runs: AskRunService, private readonly events: AskEventService, private readonly exporter: AskExportService, private readonly auth: AuthService) {}

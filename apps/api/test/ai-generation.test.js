@@ -12,11 +12,13 @@ test("uses Markdown only as temporary AI generation reference", () => {
   assert.throws(() => service.reference({ content: "x".repeat(1_000_001) }), /1 MB/);
 });
 
-test("limits calculated metric suggestions to five without Markdown and removes the limit with Markdown", () => {
+test("limits inferred metrics to five while allowing more explicitly documented metrics", () => {
   const service = new GovernanceAiService({});
   const result = { table: { business_name: "销售表", description: "销售数据" }, columns: [{ column_name: "pay_amt", metric_name: "支付金额", semantic_type: "METRIC" }], metrics: Array.from({ length: 6 }, (_, index) => ({ name: `指标${index}`, formula: "SUM(pay_amt)" })) };
-  assert.throws(() => service.parse(JSON.stringify(result), ["pay_amt"], new Map(), false), /more than 5/);
-  assert.equal(service.parse(JSON.stringify(result), ["pay_amt"], new Map(), true).metrics.length, 6);
+  assert.throws(() => service.parse(JSON.stringify(result), ["pay_amt"], new Map(), undefined), /最多只能建议 5 个.*计算指标/);
+  const contract = { table: { business_name: null, description: null }, columns: [], metrics: result.metrics.map(metric => ({ ...metric, unit: null, evidence: metric.name })) };
+  assert.equal(service.parse(JSON.stringify(result), ["pay_amt"], new Map(), contract).metrics.length, 6);
+  assert.throws(() => service.parse(JSON.stringify(result), ["pay_amt"], new Map(), { ...contract, metrics: [] }), /最多只能建议 5/);
 });
 
 test("normalizes new table and column semantic suggestions", () => {
@@ -28,24 +30,24 @@ test("normalizes new table and column semantic suggestions", () => {
       { column_name: "tag", metric_name: "商品标签", semantic_type: "LABEL", groupable: true, candidate_value_queryable: false, label_description: "用于商品筛选" },
     ],
   };
-  const parsed = service.parse(JSON.stringify(result), ["shop_id", "tag"], new Map(), false);
+  const parsed = service.parse(JSON.stringify(result), ["shop_id", "tag"], new Map(), undefined);
   assert.equal(parsed.table.data_domain, "销售管理");
   assert.equal(parsed.table.grain, "shop_id,tag");
   assert.equal(parsed.table.permission_column_name, "shop_id");
   assert.equal(parsed.columns[0].groupable, false);
   assert.equal(parsed.columns[1].candidate_value_queryable, false);
   assert.equal(parsed.columns[1].label_description, "用于商品筛选");
-  const incompletePermission = service.parse(JSON.stringify({ ...result, table: { ...result.table, permission_relation: null } }), ["shop_id", "tag"], new Map(), false);
+  const incompletePermission = service.parse(JSON.stringify({ ...result, table: { ...result.table, permission_relation: null } }), ["shop_id", "tag"], new Map(), undefined);
   assert.equal(incompletePermission.table.permission_column_name, null);
   assert.equal(incompletePermission.table.permission_relation, null);
-  const unknownDomain = service.parse(JSON.stringify({ ...result, table: { ...result.table, data_domain: "电商" } }), ["shop_id", "tag"], new Map(), false);
+  const unknownDomain = service.parse(JSON.stringify({ ...result, table: { ...result.table, data_domain: "电商" } }), ["shop_id", "tag"], new Map(), undefined);
   assert.equal(unknownDomain.table.data_domain, null);
 });
 
 test("accepts AI JSON wrapped in a Markdown code fence", () => {
   const service = new GovernanceAiService({});
   const result = { table: { business_name: "销售表", description: "销售数据" }, columns: [{ column_name: "pay_amt", metric_name: "支付金额", semantic_type: "METRIC" }] };
-  const parsed = service.parse(`模型结果：\n\n\`\`\`JSON\n${JSON.stringify(result)}\n\`\`\``, ["pay_amt"], new Map(), false);
+  const parsed = service.parse(`模型结果：\n\n\`\`\`JSON\n${JSON.stringify(result)}\n\`\`\``, ["pay_amt"], new Map(), undefined);
   assert.equal(parsed.columns[0].metric_name, "支付金额");
 });
 
@@ -53,7 +55,7 @@ test("AI partition suggestions default grouping on, allow disabling, and forbid 
   const service = new GovernanceAiService({});
   for (const [groupable, expected] of [[undefined, true], [true, true], [false, false]]) {
     const result = { table: { business_name: "销售表", description: "销售数据" }, columns: [{ column_name: "date_pt", metric_name: "日期", semantic_type: "PARTITION", groupable, candidate_value_queryable: true }] };
-    const parsed = service.parse(JSON.stringify(result), ["date_pt"], new Map(), false);
+    const parsed = service.parse(JSON.stringify(result), ["date_pt"], new Map(), undefined);
     assert.equal(parsed.columns[0].groupable, expected);
     assert.equal(parsed.columns[0].candidate_value_queryable, false);
   }

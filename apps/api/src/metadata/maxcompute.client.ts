@@ -2,7 +2,6 @@ import {
   BadGatewayException,
   ForbiddenException,
   Injectable,
-  UnauthorizedException,
 } from "@nestjs/common";
 import { createHmac } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
@@ -324,7 +323,7 @@ export class MaxComputeClient {
       );
     }
     if (response.status === 401)
-      throw new UnauthorizedException("MaxCompute credentials were rejected");
+      throw new BadGatewayException("MaxCompute 数据源凭据校验失败，请检查 AccessKey 和 SecretKey；当前 Atlas 登录不受影响");
     if (response.status === 403) {
       const detail = this.errorDetail(await response.text());
       throw new ForbiddenException(`MaxCompute rejected the request${detail ? `: ${detail}` : ""}`);

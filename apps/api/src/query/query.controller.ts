@@ -5,6 +5,9 @@ import { QueryExecutionService } from "./query-execution.service";
 import type { AuthRequest } from "../auth/auth.types";
 import { requestMemberNo } from "../auth/member-no";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("query.use")
 @Controller("queries")
 export class QueryController {
   constructor(private readonly queries: QueryExecutionService) {}

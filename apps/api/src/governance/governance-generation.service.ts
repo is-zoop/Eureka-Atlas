@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  HttpException,
   NotFoundException,
 } from "@nestjs/common";
 import {
@@ -28,6 +29,19 @@ const messages: Record<AiGenerationStep, string> = {
   SAVING_SUGGESTIONS: "正在保存 AI 建议",
 };
 
+export function generationErrorMessage(cause: unknown, step?: AiGenerationStep): string {
+  const message = cause instanceof Error ? cause.message : "";
+  if (/[\u3400-\u9fff]/u.test(message)) return message;
+  const status = cause instanceof HttpException ? cause.getStatus() : undefined;
+  if (status === 401 || status === 403) return "AI 模型鉴权失败，请检查 API Key 或重新登录模型订阅账号";
+  if (status === 429) return "AI 模型请求过于频繁或额度不足，请稍后重试并检查账号额度";
+  if (step === AiGenerationStep.CALLING_LLM) return "AI 模型调用失败，请检查模型配置、凭证或网络后重试";
+  if (step === AiGenerationStep.SAVING_DRAFT) return "保存草稿失败，请检查字段配置后重试";
+  if (step === AiGenerationStep.VALIDATING_RESULT) return "AI 返回的建议未通过校验，请重新生成";
+  if (step === AiGenerationStep.SAVING_SUGGESTIONS) return "保存 AI 建议失败，请稍后重试";
+  return "AI 建议生成失败，请稍后重试";
+}
+
 @Injectable()
 export class GovernanceGenerationService {
   private readonly controllers = new Map<string, AbortController>();
@@ -42,7 +56,7 @@ export class GovernanceGenerationService {
       where: { id: taskId },
       select: { id: true, status: true },
     });
-    if (!task) throw new NotFoundException("Governance task not found");
+    if (!task) throw new NotFoundException("治理任务不存在");
     const running = await prisma.aiGeneration.findFirst({
       where: { governanceTaskId: taskId, status: AiGenerationStatus.RUNNING },
       orderBy: { startedAt: "desc" },
@@ -65,7 +79,7 @@ export class GovernanceGenerationService {
     const generation = await prisma.aiGeneration.findFirst({
       where: { id: generationId, governanceTaskId: taskId },
     });
-    if (!generation) throw new NotFoundException("AI generation not found");
+    if (!generation) throw new NotFoundException("AI 生成记录不存在");
     return this.view(generation);
   }
 
@@ -81,9 +95,9 @@ export class GovernanceGenerationService {
     const generation = await prisma.aiGeneration.findFirst({
       where: { id: generationId, governanceTaskId: taskId },
     });
-    if (!generation) throw new NotFoundException("AI generation not found");
+    if (!generation) throw new NotFoundException("AI 生成记录不存在");
     if (generation.status !== AiGenerationStatus.RUNNING)
-      throw new ConflictException("AI generation has already finished");
+      throw new ConflictException("本次 AI 生成已结束，不能再取消");
     this.controllers.get(generationId)?.abort();
     await prisma.$transaction([
       prisma.aiGeneration.update({
@@ -144,7 +158,7 @@ export class GovernanceGenerationService {
         });
         return;
       }
-      const message = cause instanceof Error ? cause.message : "AI 生成失败";
+      const message = generationErrorMessage(cause, generation?.step);
       if (generation) {
         await prisma.$transaction([
           prisma.aiGeneration.update({
@@ -173,7 +187,7 @@ export class GovernanceGenerationService {
       select: { status: true },
     });
     if (generation?.status !== AiGenerationStatus.RUNNING)
-      throw new Error("AI generation cancelled");
+      throw new Error("AI 生成已取消");
   }
 
   private async progress(
@@ -192,7 +206,7 @@ export class GovernanceGenerationService {
     const content = typeof value?.content === "string" ? value.content.trim() : "";
     if (!content) return undefined;
     if (content.length > 1_000_000)
-      throw new BadRequestException("Markdown reference must be 1 MB or smaller");
+      throw new BadRequestException("Markdown 文件不能超过 1 MB");
     return content;
   }
 
@@ -210,7 +224,7 @@ export class GovernanceGenerationService {
       status: generation.status,
       step: generation.step,
       message: generation.message,
-      error: generation.error,
+      error: generation.error ? generationErrorMessage(new Error(generation.error), generation.step) : null,
       startedAt: generation.startedAt,
       completedAt: generation.completedAt,
     };

@@ -2,6 +2,9 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Put } from "@nestjs/
 import { SystemSettingsService } from "./system-settings.service";
 import { ModelConfigService } from "../model-config/model-config.service";
 
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("system.manage")
 @Controller("settings")
 export class SystemSettingsController {
   constructor(private readonly settings: SystemSettingsService, private readonly models: ModelConfigService) {}
@@ -13,6 +16,7 @@ export class SystemSettingsController {
   @Delete("ai-prompt") resetAiPrompt() { return this.settings.resetAiPrompt(); }
   @Get("active-ai-model") activeAiModel() { return this.models.current(); }
   @Put("active-ai-model") setActiveAiModel(@Body() body: { modelId?: unknown }) { return this.models.setActive(body?.modelId); }
+  @RequirePermission("governance.write")
   @Get("governance-options") governanceOptionRecords() { return this.settings.governanceOptionRecords(); }
   @Post("governance-options") createGovernanceOption(@Body() body: unknown) { return this.settings.createGovernanceOption(body); }
   @Patch("governance-options/:id") updateGovernanceOption(@Param("id") id: string, @Body() body: unknown) { return this.settings.updateGovernanceOption(id, body); }

@@ -11,6 +11,7 @@ const { AuthController } = require("../dist/auth/auth.controller");
 const { AuthService } = require("../dist/auth/auth.service");
 const { AuthGuard } = require("../dist/auth/auth.guard");
 const { HazeAuthService } = require("../dist/auth/haze-auth.service");
+const { RequirePermission } = require("../dist/auth/permission.decorator");
 const { CredentialCryptoService } = require("../dist/datasource/credential-crypto.service");
 const { HealthController } = require("../dist/common/health.controller");
 const { AskController } = require("../dist/ask/ask.controller");
@@ -19,17 +20,18 @@ const { AskEventService } = require("../dist/ask/ask-event.service");
 const { AskExportService } = require("../dist/ask/ask-export.service");
 
 const nativeFetch = global.fetch;
-const profile = { member_no: "test-member", name: "测试用户", phone: "13800000000", email: null, avatar_url: null, department: "测试部门", status: "active" };
+const profile = { member_no: "test-member", name: "测试用户", phone: "13800000000", email: null, avatar_url: null, department: "测试部门", role_code: "USER", role_name: "使用者", status: "active" };
 const token = "mock-haze-token-not-a-jwt";
 class ProbeController { read() { return { ok: true }; } write() { return { ok: true }; } }
 Controller("private")(ProbeController);
+RequirePermission("query.use")(ProbeController);
 Get()(ProbeController.prototype, "read", Object.getOwnPropertyDescriptor(ProbeController.prototype, "read"));
 Post()(ProbeController.prototype, "write", Object.getOwnPropertyDescriptor(ProbeController.prototype, "write"));
 
 async function fixture() {
   const records = new Map();
   const calls = [];
-  const mode = { value: "ok" };
+  const mode = { value: "ok", user: { ...profile } };
   const savedEnv = Object.fromEntries(["DATA_SOURCE_ENCRYPTION_KEY", "HAZE_API_ORIGIN", "WEB_ORIGIN", "NODE_ENV"].map(key => [key, process.env[key]]));
   process.env.DATA_SOURCE_ENCRYPTION_KEY = Buffer.alloc(32, 5).toString("base64");
   process.env.HAZE_API_ORIGIN = "https://mock-haze.invalid";
@@ -56,11 +58,11 @@ async function fixture() {
     if (url.endsWith("/login")) {
       const body = JSON.parse(options.body);
       if (body.password !== "test-password") return Response.json({ code: 4011 }, { status: 401 });
-      return Response.json({ code: 0, data: { access_token: token, token_type: "bearer", expires_in: 3600, user: { ...profile, role_code: "USER", permissions: ["secret.permission"] } } });
+      return Response.json({ code: 0, data: { access_token: token, token_type: "bearer", expires_in: 3600, user: { ...mode.user, permissions: ["secret.permission"] } } });
     }
     assert.ok(url.endsWith("/me"), "Eureka must never invoke Haze logout");
     assert.equal(options.headers.Authorization, `Bearer ${token}`);
-    return Response.json({ code: 0, data: { ...profile, permissions: ["secret.permission"] } });
+    return Response.json({ code: 0, data: { ...mode.user, permissions: ["secret.permission"] } });
   });
   const module = await Test.createTestingModule({
     controllers: [ProbeController, AuthController, HealthController, AskController],
@@ -105,6 +107,52 @@ test("real login exposes only user fields and stores a hashed cookie and encrypt
     const { cookie: newCookie } = await f.signIn(cookie);
     assert.notEqual(newCookie, cookie); assert.equal(f.records.size, 1);
     assert.equal((await f.request("/api/private", { headers: { Cookie: cookie } })).status, 401);
+  } finally { await f.close(); }
+});
+
+test("login and me retain all four Haze roles without guessing from member number or permissions", async () => {
+  const f = await fixture();
+  try {
+    for (const [role_code, role_name] of [["SYSTEM_ADMIN", "系统管理员"], ["ADMIN", "管理员"], ["DEVELOPER", "开发者"], ["USER", "使用者"]]) {
+      f.mode.user = { ...profile, role_code, role_name };
+      const { response, cookie } = await f.signIn();
+      assert.deepEqual(await response.json(), f.mode.user);
+      const me = await f.request("/api/auth/me", { headers: { Cookie: cookie } });
+      assert.deepEqual(await me.json(), f.mode.user);
+    }
+  } finally { await f.close(); }
+});
+
+test("authentication reads the current Haze role on every request without renewing or caching the session", async () => {
+  const f = await fixture();
+  try {
+    const { cookie } = await f.signIn();
+    const calls = f.calls.length;
+    for (const role_code of ["SYSTEM_ADMIN", "ADMIN", "DEVELOPER", "USER"]) {
+      f.mode.user = { ...profile, role_code };
+      const response = await f.request("/api/auth/me", { headers: { Cookie: cookie } });
+      assert.equal((await response.json()).role_code, role_code);
+      assert.equal(response.headers.get("set-cookie"), null);
+      assert.equal(f.records.size, 1);
+    }
+    assert.equal(f.calls.length, calls + 4);
+  } finally { await f.close(); }
+});
+
+test("missing or unknown roles never gain access or create a new session", async () => {
+  const f = await fixture();
+  try {
+    const { cookie } = await f.signIn();
+    for (const role_code of [undefined, "OWNER", "admin", 1]) {
+      f.mode.user = { ...profile, role_code, member_no: "ADMIN0001", role_name: "系统管理员" };
+      const login = await f.request("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: profile.phone, password: "test-password" }) });
+      assert.equal(login.status, 403);
+      assert.equal(login.headers.get("set-cookie"), null);
+      const me = await f.request("/api/auth/me", { headers: { Cookie: cookie } });
+      assert.equal(me.status, 403);
+      assert.equal(me.headers.get("set-cookie"), null);
+      assert.equal(f.records.size, 1);
+    }
   } finally { await f.close(); }
 });
 

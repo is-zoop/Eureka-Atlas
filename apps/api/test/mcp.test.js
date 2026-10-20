@@ -1,0 +1,22 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+const {Test}=require('@nestjs/testing'),{APP_GUARD,APP_FILTER}=require('@nestjs/core'),{UnauthorizedException,ServiceUnavailableException}=require('@nestjs/common');
+const {AuthGuard}=require('../dist/auth/auth.guard'),{AuthService}=require('../dist/auth/auth.service');
+const {McpController}=require('../dist/integrations/mcp.controller'),{McpToolsService}=require('../dist/integrations/mcp-tools.service'),{AgentSessionsService}=require('../dist/integrations/agent-sessions.service');
+const {SelectionAccessService}=require('../dist/integrations/selection-access.service');
+const {McpDataService}=require('../dist/integrations/mcp-data.service');
+const {ExternalLimitsGuard,ExternalLimitsService}=require('../dist/external-api/external-limits'),{ExternalExceptionFilter}=require('../dist/external-api/external-http');
+async function fixture(){let count=0;const rows=new Map();const sessions={create:async memberNo=>{const row={id:'s'+ ++count,owner:memberNo};rows.set(row.id,row);return row},describe:async(memberNo,id)=>{if(rows.get(id)?.owner!==memberNo)throw new (require('@nestjs/common').NotFoundException)();return{session_id:id,scope_mode:'ALL',scope_revision:0}}};
+ const mod=await Test.createTestingModule({controllers:[McpController],providers:[McpToolsService,{provide:SelectionAccessService,useValue:{}},{provide:McpDataService,useValue:{definitions:async()=>[],call:async()=>{throw new (require('@nestjs/common').BadRequestException)()}}},ExternalLimitsGuard,ExternalLimitsService,{provide:AgentSessionsService,useValue:sessions},{provide:AuthService,useValue:{authenticate:()=>{throw Error('Cookie auth must never run')},authenticateCredential:async req=>{const key=req.get('authorization');if(key==='Bearer down')throw new ServiceUnavailableException();if(key==='Bearer user')return{member_no:'U',role_code:'USER'};if(key==='Bearer developer')return{member_no:'D',role_code:'DEVELOPER'};if(key==='Bearer unknown-role')return{member_no:'X',role_code:'OWNER'};if(!['Bearer A','Bearer B'].includes(key))throw new UnauthorizedException();return{member_no:key.slice(7),role_code:'ADMIN'}}}},{provide:APP_GUARD,useClass:AuthGuard},{provide:APP_FILTER,useClass:ExternalExceptionFilter}]}).compile();const app=mod.createNestApplication({logger:false});app.setGlobalPrefix('api');await app.listen(0,'127.0.0.1');const base=await app.getUrl();
+ const request=async(method,params={},key='A',extra={})=>{const res=await fetch(base+'/api/mcp',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json',Accept:'application/json, text/event-stream',Cookie:'valid-cookie',...extra},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});return{res,body:await res.json()}};return{app,request,tools:app.get(McpToolsService),base};}
+test('official stateless MCP negotiates, lists tools, creates isolated business contexts and never uses Cookie',async()=>{const f=await fixture();try{
+ const init=await f.request('initialize',{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'test',version:'1'}});assert.equal(init.res.status,200);assert.ok(init.body.result.capabilities.tools);assert.equal(init.res.headers.get('mcp-session-id'),null);
+ const listed=await f.request('tools/list');assert.ok(listed.body.result.tools.some(t=>t.name==='create_query_session'));
+ const created=await f.request('tools/call',{name:'create_query_session',arguments:{}});const id=created.body.result.structuredContent.data.session_id;
+ assert.equal((await f.request('tools/call',{name:'get_query_session',arguments:{session_id:id}})).body.result.isError,undefined);
+ assert.equal((await f.request('tools/call',{name:'get_query_session',arguments:{session_id:id}},'B')).body.result.structuredContent.error.code,'NOT_FOUND');
+ for(const [key,status]of[['bad',401],['unknown-role',403],['down',503]]){const result=await f.request('tools/list',{},key);assert.equal(result.res.status,status);assert.equal(result.res.headers.get('set-cookie'),null);assert.ok(result.body.error.data.request_id);if(status===403)assert.equal(result.body.error.message.includes('仅管理员'),false);}
+ for(const key of ['user','developer'])assert.equal((await f.request('tools/list',{},key)).res.status,200);
+ assert.equal((await f.request('tools/list',{},'A',{Origin:'https://evil.invalid'})).res.status,403);
+ const unknown=await f.request('tools/call',{name:'unknown',arguments:{}});assert.equal(unknown.body.result.isError,true);
+}finally{await f.app.close()}});
+module.exports={fixture};

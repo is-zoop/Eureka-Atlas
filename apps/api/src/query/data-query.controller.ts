@@ -5,6 +5,9 @@ import type { AuthRequest } from "../auth/auth.types";
 import { requestMemberNo } from "../auth/member-no";
 import { DataQueryService } from "./data-query.service";
 import { DataQueryExportService } from "./data-query-export.service";
+import { RequirePermission } from "../auth/permission.decorator";
+
+@RequirePermission("query.use")
 @Controller("data-queries")
 export class DataQueryController {
   constructor(private readonly queries: DataQueryService,private readonly exporter: DataQueryExportService) {}

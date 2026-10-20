@@ -69,7 +69,7 @@ test("invalid configuration fails saving; changed semantics retain the original 
 });
 
 test("saved query HTTP routes use the global login and origin guard, including PATCH and DELETE",async t=>{
-  const f=fixture(t);const module=await Test.createTestingModule({controllers:[SavedDataQueryController],providers:[{provide:SavedDataQueryService,useValue:f.service},{provide:AuthService,useValue:{authenticate:async req=>{const member=req.get("cookie");if(!["A","B"].includes(member))throw new UnauthorizedException();return {member_no:member};}}},{provide:APP_GUARD,useClass:AuthGuard}]}).compile();
+  const f=fixture(t);const module=await Test.createTestingModule({controllers:[SavedDataQueryController],providers:[{provide:SavedDataQueryService,useValue:f.service},{provide:AuthService,useValue:{authenticate:async req=>{const member=req.get("cookie");if(!["A","B"].includes(member))throw new UnauthorizedException();return {member_no:member,role_code:member==="B"?"SYSTEM_ADMIN":"USER"};}}},{provide:APP_GUARD,useClass:AuthGuard}]}).compile();
   const app=module.createNestApplication({logger:false});app.setGlobalPrefix("api");await app.listen(0,"127.0.0.1");t.after(()=>app.close());const base=await app.getUrl();
   const request=(path,member,method="GET",body,cross=false)=>fetch(base+"/api/saved-data-queries"+path,{method,headers:{...(member?{Cookie:member}:{}),"Content-Type":"application/json",...(cross?{"Sec-Fetch-Site":"cross-site"}:{})},...(body?{body:JSON.stringify(body)}:{})});
   const body={name:"销售",config:config()};

@@ -1,0 +1,120 @@
+{
+  "base_url": "http://localhost:3000",
+  "authentication": "Authorization: Bearer YOUR_PERSONAL_CREDENTIAL",
+  "table": {
+    "id": "cmtjx68k5031sw1jk8b7i9cfj",
+    "name": "天猫店铺商品流量来源明细表",
+    "content_version": "a608ec9a0bd42c9adbe86396117a70ff4071ef43f74bdcbe6ae33218bc14c5d1"
+  },
+  "notes": [
+    "真实表、字段和版本来自当前项目数据库；已校验已发布范围、请求 Schema 和两种查询的编译，未执行任何 MaxCompute 查询或真实凭证鉴权。",
+    "实际发送查询可能产生 MaxCompute 费用，请先确认日期范围。",
+    "日期沿用用户截图的 2026-10-01 至 2026-10-15，不保证该范围有数据。",
+    "在 API 中心将 path_params 粘贴到路径参数区，将 body 粘贴到 JSON 请求体区；body 为 null 表示不发送请求体。",
+    "REPLACE_WITH_YOUR_QUERY_ID 必须替换为本人提交指标查询或候选值查询后返回的 data.id，不使用 idempotency_key。",
+    "候选值任务和指标任务分别有各自的 data.id，两者都可以读取状态、结果或取消。",
+    "结果仅在 SUCCEEDED 后可读；若先取消同一个任务，可能无法再读取成功结果。",
+    "同一请求重试保留幂等标识，修改参数或新查一次必须生成新标识。",
+    "语义重新发布后先重新读取 Package，替换 content_version；其他环境需重新核对全部 ID。"
+  ],
+  "requests": [
+    {
+      "id": "search",
+      "name": "搜索语义资产",
+      "method": "POST",
+      "path": "/api/external/v1/semantic/search",
+      "path_params": {},
+      "body": {
+        "keywords": ["天猫店铺商品流量来源明细表"],
+        "page": 1,
+        "page_size": 20
+      }
+    },
+    {
+      "id": "package",
+      "name": "获取正式语义 Package",
+      "method": "GET",
+      "path": "/api/external/v1/semantic/packages/cmtjx68k5031sw1jk8b7i9cfj",
+      "path_params": {
+        "tableId": "cmtjx68k5031sw1jk8b7i9cfj"
+      },
+      "body": null
+    },
+    {
+      "id": "query",
+      "name": "按店铺查询支付金额和访客数",
+      "method": "POST",
+      "path": "/api/external/v1/queries",
+      "path_params": {},
+      "body": {
+        "table_id": "cmtjx68k5031sw1jk8b7i9cfj",
+        "content_version": "a608ec9a0bd42c9adbe86396117a70ff4071ef43f74bdcbe6ae33218bc14c5d1",
+        "date_range": {
+          "start": "2026-10-01",
+          "end": "2026-10-15"
+        },
+        "idempotency_key": "1732888f-6ae9-4d54-a0be-fabdc5216241",
+        "metric_ids": [
+          "cmtjx68kx032ow1jksc1swgi9",
+          "cmtjx68ke0320w1jk3mh51a3x"
+        ],
+        "dimension_ids": ["cmtjx68l6032yw1jkfhle4qfz"],
+        "order_by": [
+          {
+            "field_id": "cmtjx68kx032ow1jksc1swgi9",
+            "direction": "DESC"
+          }
+        ],
+        "limit": 20
+      }
+    },
+    {
+      "id": "dimensionValues",
+      "name": "查询店铺名称候选值",
+      "method": "POST",
+      "path": "/api/external/v1/queries/dimension-values",
+      "path_params": {},
+      "body": {
+        "table_id": "cmtjx68k5031sw1jk8b7i9cfj",
+        "content_version": "a608ec9a0bd42c9adbe86396117a70ff4071ef43f74bdcbe6ae33218bc14c5d1",
+        "date_range": {
+          "start": "2026-10-01",
+          "end": "2026-10-15"
+        },
+        "idempotency_key": "388e0afe-131f-40c7-9dbb-f35cb726d553",
+        "field_id": "cmtjx68l6032yw1jkfhle4qfz",
+        "limit": 20
+      }
+    },
+    {
+      "id": "status",
+      "name": "读取本人查询状态",
+      "method": "GET",
+      "path": "/api/external/v1/queries/REPLACE_WITH_YOUR_QUERY_ID",
+      "path_params": {
+        "queryId": "REPLACE_WITH_YOUR_QUERY_ID"
+      },
+      "body": null
+    },
+    {
+      "id": "result",
+      "name": "读取本人成功查询的结果",
+      "method": "GET",
+      "path": "/api/external/v1/queries/REPLACE_WITH_YOUR_QUERY_ID/result",
+      "path_params": {
+        "queryId": "REPLACE_WITH_YOUR_QUERY_ID"
+      },
+      "body": null
+    },
+    {
+      "id": "cancel",
+      "name": "取消本人查询",
+      "method": "POST",
+      "path": "/api/external/v1/queries/REPLACE_WITH_YOUR_QUERY_ID/cancel",
+      "path_params": {
+        "queryId": "REPLACE_WITH_YOUR_QUERY_ID"
+      },
+      "body": {}
+    }
+  ]
+}
