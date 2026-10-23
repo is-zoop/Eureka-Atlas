@@ -33,14 +33,27 @@ test("pnpm dependency fetches have their own bounded timeout, retries, and concu
   assert.doesNotMatch(dockerfile, /strict-ssl=false|verify-store-integrity=false|--ignore-scripts/);
 });
 
+test("package metadata cache survives failed installs independently of the existing package store", () => {
+  assert.match(dockerfile, /--mount=type=cache,id=atlas-pnpm,target=\/pnpm\/store/);
+  assert.match(dockerfile, /--mount=type=cache,id=atlas-pnpm-metadata,target=\/pnpm\/cache,sharing=locked/);
+  assert.match(dockerfile, /install --frozen-lockfile .*--cache-dir=\/pnpm\/cache/);
+});
+
+test("npm bootstrap and dependency installation use the same explicit registry without disabling supply-chain policies", () => {
+  assert.match(dockerfile, /ARG NPM_REGISTRY=https:\/\/registry\.npmjs\.org\//);
+  assert.match(dockerfile, /npm install --global pnpm@[^\s]+ --registry="\$NPM_REGISTRY"/);
+  assert.match(dockerfile, /install --frozen-lockfile .*--registry="\$NPM_REGISTRY"/);
+  assert.doesNotMatch(dockerfile, /ENV NPM_REGISTRY|--offline|--prefer-offline|trust-policy|minimum-release-age|CHECKSUM_IGNORE_MISSING/);
+});
+
 test("native addons compile with the official image's local Node headers without downloading them", () => {
   const install = dockerfile.split("# These options apply to pnpm registry requests")[1].split("COPY apps/api ./apps/api")[0];
   for (const file of ["node.h", "common.gypi", "config.gypi"]) {
     assert.ok(install.includes(`test -f /usr/local/include/node/${file}`));
   }
-  assert.match(install, /&& npm_package_config_node_gyp_nodedir=\/usr\/local \\\r?\n\s+PRISMA_ENGINES_MIRROR=/);
+  assert.match(install, /&& npm_config_nodedir=\/usr\/local \\\r?\n/);
   assert.match(install, /pnpm --reporter=append-only .*install --frozen-lockfile/);
-  assert.doesNotMatch(dockerfile, /ENV npm_package_config_node_gyp_nodedir|npm_config_nodedir|--ignore-scripts/);
+  assert.doesNotMatch(dockerfile, /ENV npm_config_nodedir|npm_package_config_node_gyp_nodedir|--ignore-scripts/);
 });
 
 test("Compose consistently forwards the persisted Prisma mirror to all build targets, not runtime environments", () => {
@@ -51,7 +64,10 @@ test("Compose consistently forwards the persisted Prisma mirror to all build tar
     assert.ok(build.includes(`target: ${target}`));
     assert.ok(build.includes('PRISMA_ENGINES_MIRROR: "${PRISMA_ENGINES_MIRROR:-https://binaries.prisma.sh}"'));
     assert.ok(!runtime.includes("PRISMA_ENGINES_MIRROR"));
+    assert.ok(build.includes('NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"'));
+    assert.ok(!runtime.includes("NPM_REGISTRY"));
   }
   const example = fs.readFileSync(path.join(__dirname, "../../../.env.docker.example"), "utf8");
   assert.match(example, /^PRISMA_ENGINES_MIRROR=https:\/\/binaries\.prisma\.sh$/m);
+  assert.match(example, /^NPM_REGISTRY=https:\/\/registry\.npmjs\.org\/$/m);
 });

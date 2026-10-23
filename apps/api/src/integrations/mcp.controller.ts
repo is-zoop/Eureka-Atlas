@@ -21,6 +21,8 @@ import { requestMemberNo } from "../auth/member-no";
 import { ExternalLimitsGuard } from "../external-api/external-limits";
 import { safeExternalError, trace } from "../external-api/external-http";
 import { McpToolsService } from "./mcp-tools.service";
+import { timed, serverTiming, type McpTimings } from "./mcp-timing";
+import { mcpResultText } from "./mcp-result-text";
 import { PLUGIN_VERSION } from "./plugin-skill";
 
 @ExternalApi()
@@ -65,19 +67,27 @@ export class McpController {
       tools: await this.tools.definitions(),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const timings: McpTimings = { auth: req.authElapsedMs ?? 0 };
       try {
-        const data = await this.tools.call(
-          memberNo,
-          request.params.name,
-          request.params.arguments ?? {},
-          personalCredentialFromRequest(req),
+        const data = await timed(timings, "tool", () =>
+          this.tools.call(
+            memberNo,
+            request.params.name,
+            request.params.arguments ?? {},
+            personalCredentialFromRequest(req),
+            timings,
+          ),
         );
-        const payload = { data, request_id: requestId };
+        res.setHeader("Server-Timing", serverTiming(timings));
+        const payload = { data, request_id: requestId, timings_ms: timings };
         return {
-          content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+          content: [
+            { type: "text" as const, text: mcpResultText(data, requestId) },
+          ],
           structuredContent: payload,
         };
       } catch (cause) {
+        res.setHeader("Server-Timing", serverTiming(timings));
         const error = safeExternalError(cause);
         const payload = {
           error: { code: error.code, message: error.message },

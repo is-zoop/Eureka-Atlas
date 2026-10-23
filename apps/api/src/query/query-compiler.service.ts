@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
 import { normalizeDataFilters, shiftDay, type DataFilterGroup } from "./data-query-dates";
 import { Parser } from "node-sql-parser";
+import { resolveResultDisplay, type ResultDisplayFormat } from "@eureka-atlas/result-format";
 import type { DataDimensionValuesRequest, DataQueryRequest, DimensionValuesRequest, QueryFilter, QueryRequest, SemanticPackage } from "@eureka-atlas/types" with { "resolution-mode": "import" };
 
-type Output = { id: string; name: string; type: string; unit: string | null };
+type Output = { id: string; name: string; type: string; unit: string | null; display?: ResultDisplayFormat };
 export type CompiledQuery = { sql: string; outputs: Output[]; snapshotDate: string | null; limit: number };
 type CompileOptions = { snapshotDate?: string | null; maxRows?: number; completeDays?: boolean; candidateSearch?: boolean; filterGroups?: DataFilterGroup[]; configOnly?: boolean };
 
@@ -47,7 +48,7 @@ export class QueryCompilerService {
       return alias;
     };
     const selections = dimensions.map((field) => {
-      const alias = addOutput({ id: field.id, name: field.name, type: field.normalized_type, unit: null });
+      const alias = addOutput({ id: field.id, name: field.name, type: field.normalized_type, unit: null, display: resolveResultDisplay({type:field.normalized_type,metric:false}) });
       return `${quote(field.column)} AS ${quote(alias)}`;
     });
     for (const id of metricIds) {
@@ -58,13 +59,13 @@ export class QueryCompilerService {
         const aggregation = text(field.aggregation).toUpperCase();
         if (!aggregations.has(aggregation)) throw new BadRequestException(`指标 ${field.name} 的聚合方式不受支持`);
         const expression = aggregation === "COUNT_DISTINCT" ? `COUNT(DISTINCT ${quote(field.column)})` : `${aggregation}(${quote(field.column)})`;
-        const alias = addOutput({ id, name: field.name, type: field.normalized_type, unit: field.unit });
+        const alias = addOutput({ id, name: field.name, type: field.normalized_type, unit: field.unit, display: resolveResultDisplay({type:field.normalized_type,unit:field.unit,metric:true,aggregation}) });
         selections.push(`${expression} AS ${quote(alias)}`);
         continue;
       }
       if (!metric) throw new BadRequestException(`指标 ${id} 不存在于当前正式语义`);
       this.assertFormula(metric.formula, fields, metric.name);
-      const alias = addOutput({ id, name: metric.name, type: "DECIMAL", unit: metric.unit });
+      const alias = addOutput({ id, name: metric.name, type: "DECIMAL", unit: metric.unit, display: resolveResultDisplay({type:"DECIMAL",unit:metric.unit,metric:true}) });
       selections.push(`(${metric.formula}) AS ${quote(alias)}`);
     }
     const { where } = this.where(pkg, fields, asArray(input.filters), input.date_range, options.snapshotDate, options.completeDays, options.filterGroups, options.configOnly);
@@ -126,7 +127,7 @@ export class QueryCompilerService {
         if (!aliases.has(item.field_id) || !["ASC","DESC"].includes(item.direction)) throw new BadRequestException("排序必须使用已选输出字段");
         return quote(aliases.get(item.field_id)!)+ " "+item.direction;
       });
-      compiled = { sql:["SELECT "+selections.join(", "), "FROM "+quote(pkg.source.project)+"."+quote(pkg.table.name),where ? "WHERE "+where : "",order.length ? "ORDER BY "+order.join(", ") : "","LIMIT 200001;"].filter(Boolean).join("\n"),outputs:selected.map(field => ({id:field.id,name:field.name,type:field.normalized_type,unit:field.unit})),snapshotDate:options.snapshotDate ?? null,limit:200000 };
+      compiled = { sql:["SELECT "+selections.join(", "), "FROM "+quote(pkg.source.project)+"."+quote(pkg.table.name),where ? "WHERE "+where : "",order.length ? "ORDER BY "+order.join(", ") : "","LIMIT 200001;"].filter(Boolean).join("\n"),outputs:selected.map(field => ({id:field.id,name:field.name,type:field.normalized_type,unit:field.unit,display:resolveResultDisplay({type:field.normalized_type,unit:field.unit,metric:field.type==='METRIC',aggregation:field.aggregation})})), snapshotDate:options.snapshotDate ?? null,limit:200000 };
     }
     return {...compiled,resolvedDates:normalized.resolvedDates};
   }
@@ -162,7 +163,7 @@ export class QueryCompilerService {
       `ORDER BY ${quote(field.column)} ASC`,
       `LIMIT ${limit + 1};`,
     ].filter(Boolean);
-    return { sql: clauses.join("\n"), outputs: [{ id: field.id, name: field.name, type: field.normalized_type, unit: null }], snapshotDate: options.snapshotDate ?? null, limit };
+    return { sql: clauses.join("\n"), outputs: [{ id: field.id, name: field.name, type: field.normalized_type, unit: null, display: resolveResultDisplay({type:field.normalized_type,metric:false}) }], snapshotDate: options.snapshotDate ?? null, limit };
   }
 
   private where(pkg: SemanticPackage, fields: Map<string, SemanticPackage["fields"][number]>, filters: QueryFilter[], dateRange: QueryRequest["date_range"] | DimensionValuesRequest["date_range"], snapshotDate?: string | null, completeDays = false, filterGroups?: DataFilterGroup[], configOnly = false) {

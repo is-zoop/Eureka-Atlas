@@ -57,7 +57,7 @@ async function fixture() {
       return async (...args) => {
         calls.push({ service: service.name, name, args });
         if (name === "after") return [];
-        if (name === "archive") return {buffer:Buffer.from('zip'),filename:'atlas-ask.zip',rulesVersion:'version'};
+        if (name === "archive") return {buffer:Buffer.from('zip'),filename:'atlas-ask.zip',rulesVersion:'version',sha256:'a'.repeat(64)};
         if (name === "workbook") return Buffer.from("test-xlsx");
         if (name === "write") { args.at(-1).end("test-xlsx"); return; }
         return { ok: true };

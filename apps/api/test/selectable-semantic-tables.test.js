@@ -17,12 +17,12 @@ test("lists only active published tables with an active published field", async 
   prisma.metaTable = {
     findMany: async (query) => {
       calls.push(query);
-      return [{ id: "table-a" }, { id: "table-b" }];
+      return [packageFor('table-a','销售','店铺销售','dw'),packageFor('table-b',null,'订单明细','ods')].map(p=>({id:p.table.id,name:p.table.name,semantic:{businessName:p.table.business_name,dataDomain:p.table.data_domain},metaProject:{name:p.source.project,catalog:p.source.catalog,schema:p.source.schema,dataSource:{id:p.source.id,name:p.source.name}}}));
     },
   };
   const packages = { getInTransaction: async (_tx, id) => id === "table-a" ? packageFor(id, "销售", "店铺销售", "dw") : packageFor(id, null, "订单明细", "ods") };
   try {
-    const result = await new SelectableSemanticTablesService(packages).list();
+    const result = await new SelectableSemanticTablesService().list();
     assert.equal(calls.length, 1);
     assert.equal(calls[0].where.status, "ACTIVE");
     assert.equal(calls[0].where.metaProject.status, "ACTIVE");

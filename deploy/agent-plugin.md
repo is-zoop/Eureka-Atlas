@@ -50,9 +50,17 @@ URL 中的片段包含五分钟有效、一次性启动码，不包含长期个�
 
 完整 JSON、字段映射和安全要求见 [格式与宿主契约](../docs/agent-plugin-format.md)。本次不实现历史版本管理、回滚、自动更新、发布接口或 Eureka 原生面板。
 
-#### Eureka 2.3.0：宿主能力 · 问题澄清
+#### Eureka 2.4.2：输入框常驻选用
 
-依据 Eureka `docs/clarification.md`，本次仅更新 Eureka 版包：在 `extensions.com.eureka` 合并 `capabilities.requestUserInput=true`，保留 schemaVersion=1、图标和个人凭证认证。Eureka 已支持声明该能力，安装准备及详情显示“宿主能力 · 问题澄清”。Codex、Claude 维持2.2.1版本与原产物内容。
+清单 `extensions.com.eureka` 新增 `composer: {selectionMode: "persistent"}`，保留schemaVersion=1、认证和问题澄清能力。用户主动选中后，标签常驻当前对话输入框，后续消息持续使用，直到移除；`once` 表示本条消息使用后清空。此声明不自动启用插件、不启动后台常驻进程，也不授予额外权限。未选中/移除后，不得用历史选择继续调用该插件的技能、MCP或能力，由宿主核验每轮有效选择及工具权限。
+
+仅更新Eureka版清单、版本及说明，不修改Codex/Claude、MCP配置或共享业务Skill/规则哈希。下载/上传新2.4.2包，Haze版本一致，更新组织安装后在会话空闲时重载并由用户选择。未进行真实安装与输入框选中/发送/移除验收，不自动上传发布。
+
+本轮API编译及11项针对性测试通过；实际11文件ZIP通过当前Eureka解析器离线校验，并与2.4.1比较，Skill、菜单、规则、MCP及图标逐字节一致。产物为`artifacts/agent-plugins/atlas-ask-eureka-2.4.2-1a956a5a126f.zip`，另复制到桌面并附`.sha256`；ZIP SHA-256为`0fd5d825675cef6c54826bc478a91c695fa4e277ca6368566ea3ebcdd38d0ced`。离线验证不等于实际输入框交互验收。
+
+#### Eureka：宿主能力 · 问题澄清
+
+依据 Eureka `docs/clarification.md`，本次仅更新 Eureka 版包：在 `extensions.com.eureka` 合并 `capabilities.requestUserInput=true`，保留 schemaVersion=1、图标和个人凭证认证。Eureka 已支持声明该能力，安装准备及详情显示“宿主能力 · 问题澄清”。该宿主能力不添加到 Codex/Claude；本轮共享问数规则版本为2.3.1。
 
 `request_user_input` 是 Eureka 宿主工具，不是 Atlas MCP；不新增同名 MCP、不改 `mcp.json`、不引入 JS/hooks/凭证脚本。能力按实际插件入口或所属 Skill 加载路径、来源 Haze、能力 ID、已加载摘要及会话权限开放，不能只靠安装或普通文字提及插件名获权。日常澄清开关不控制插件声明；完全禁用工具不会被声明自动恢复。
 
@@ -60,7 +68,7 @@ Eureka `atlas-ask` 仅在读过规则、已有业务会话及语义口径后，�
 
 回答后仍使用原 Atlas `session_id`、`scope_revision` 和选数，必要时从同一会话刷新版本，不新建全范围或清空选择。`atlas-menu` 继续既有目录页面，未改成问答卡片。活动会话须在空闲时显式重载。
 
-Eureka 版独立版本源为 `eureka-plugin.ts`，当前2.3.0；`plugin.json`、`package.json`、`atlas-release.json`、文件名和 Haze 发布版本必须一致。管理员上传时将 Haze 版本填写为2.3.0，本次不修改 Haze、不上传或发布。管理信息中的基础 `version` 仍为 Codex/Claude 的2.2.1，Eureka 下载项另含 `version=2.3.0`，不把其他端误升级。
+Eureka 版独立版本源为 `eureka-plugin.ts`，当前2.4.2；`plugin.json`、`package.json`、`atlas-release.json`、文件名和 Haze 发布版本必须一致。管理员上传时将 Haze 版本填写为2.4.2，本次不修改 Haze、不上传或发布。管理信息中的基础 `version` 为 Codex/Claude 的2.3.1，Eureka 下载项另含 `version=2.4.2`，不把其他端误升级。
 
 真实 Atlas 新包仍须验证“入口调用 → 歧义澄清 → 原业务会话继续查询”，并覆盖自定义答案、跳过、无工具时的文字退回和重载不丢选数；离线包或模拟测试不替代真实安装与查询联调。
 
@@ -70,6 +78,7 @@ Eureka 版独立版本源为 `eureka-plugin.ts`，当前2.3.0；`plugin.json`、
 
 ```powershell
 cd "E:\Eureka Atlas\apps\api"
+node ..\..\packages\result-format\node_modules\typescript\bin\tsc -p ..\..\packages\result-format\tsconfig.json
 node node_modules/typescript/bin/tsc -p tsconfig.build.json
 cd ..\..
 node apps/api/scripts/export-eureka-plugin.cjs --origin https://atlas.paiwo188.com
@@ -77,7 +86,7 @@ node apps/api/scripts/export-eureka-plugin.cjs --origin https://atlas.paiwo188.c
 
 脚本要求显式 `--origin`，默认生产模式，复用 `public-origin.ts` 检查可信 HTTPS 根地址；不接受 localhost、私有 IP、容器名或请求 Host。它只编译 Nest DI 容器，不 init/listen，不启动查询调度；通过现有 `SystemSettingsService` 读取数据库中当前生效问数规则，再走同一 ZIP 生成器及泄露检查。数据库不可达或规则包含疑似凭证时失败，不静默替换默认规则。它是本地开发/管理操作，不取代 HTTP 管理权限。
 
-默认输出在项目内 `artifacts/agent-plugins/`（Git 忽略），文件名沿用版本号与业务修订前12位，并生成 `.zip.sha256` 侧车文件。控制台仅打印产物路径、哈希、公开 MCP 地址和开发标记，不打印规则正文或环境变量。可用 `--output <目录>` 改输出位置。
+默认输出在项目内 `artifacts/agent-plugins/`（Git 忽略），文件名沿用版本号与业务修订前12位，并生成 `.zip.sha256` 侧车文件。控制台仅打印产物路径、哈希、公开 MCP 地址和开发标记，不打印规则正文或环境变量。可用 `--output <目录>` 改输出位置，`--client all` 一次导出三个客户端，或指定 codex/claude/eureka。
 
 本地 HTTP 测试必须显式声明开发用途：
 
@@ -89,7 +98,7 @@ node apps/api/scripts/export-eureka-plugin.cjs --origin http://localhost:3000 --
 
 #### 规则修订与 ZIP 校验
 
-`rules_version` 只覆盖共享查询业务 Skill、菜单规则和当前规则快照，不覆盖宿主适配、包版本、域名、图标、生成时间。它跨三端相同，用于过期规则检查，不是 ZIP 文件哈希。宿主适配改变通过对应客户端版本发布：Codex/Claude保持2.2.1，Eureka宿主澄清适配独立为2.3.0。共享业务规则及其哈希未因 Eureka 宿主能力改变，不额外增加宿主摘要。
+`rules_version` 只覆盖共享查询业务 Skill、菜单规则和当前规则快照，不覆盖宿主适配、包版本、域名、图标、生成时间。它跨三端相同，用于过期规则检查，不是 ZIP 文件哈希。宿主适配改变通过对应客户端版本发布：当前 Codex/Claude 为2.3.1，Eureka为2.4.2。共享业务规则及其哈希未因 Eureka 宿主能力改变，不额外增加宿主摘要。
 
 `X-Atlas-Archive-SHA256` 和本地 `.zip.sha256` 文件是实际 ZIP 字节的 SHA-256。生成时间不同可使 ZIP 哈希不同，但不应改变规则修订；ZIP 不内嵌自己的最终校验和。不要把文件名中的12位规则摘要当作文件校验和。
 
@@ -154,6 +163,14 @@ Windows API 可能锁住 Prisma DLL，应在维护窗口停止对应进程后正
 API 调试请求同源，复制调用示例使用浏览器域名；`API_ORIGIN=http://api:3001` 只是容器内部代理。更换域名后需更新插件并重开客户端，旧 ZIP 不会自动改写地址。
 
 代理必须保留 Authorization、Accept、Content-Type、MCP-Protocol-Version、Set-Cookie 和真实状态；不缓存鉴权/选数/下载。不记录请求体、Authorization、Cookie、启动码或完整工具结果。不向任意网页开放 CORS；桌面原生请求不需要放宽来源检查。
+
+## 本轮问数质量与等待部署
+
+仅按已有unit展示（%乘100、万元除10000等），默认两位；上一版额外维护尺度的设计已撤销，治理恢复原单位控件，字段/Package也不再包含格式配置。新迁移 `20261021100000_unit_driven_display` 删除额外配置列，保留已应用的旧迁移历史不改写。备份后先构建镜像，停止旧API/Web，再迁移、生成客户端及启动新版。无需为单位转换维护新字段或重新发布全部指标。见 [单位约定](../docs/metric-display-audit.md)。本轮未变更运行数据库。
+
+MCP提交/结果读取增加wait_ms有界等待，短任务直接返回格式化表格及原始结构化结果；目录轻量查询，无新增授权缓存或服务端来源确认门禁。多来源在上下文不足时必须由Agent请用户选择，不能把模型规则当作硬保证。计时字段不含Eureka宿主开销。
+
+详细合同、旧自定义提示词清理、发布失效、展示限额与真实验收边界见 [实现与部署](../docs/agent-query-quality-implementation.md)。
 
 ## 验证与边界
 

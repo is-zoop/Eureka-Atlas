@@ -1,3 +1,6 @@
+import type { ResultDisplayFormat } from "@eureka-atlas/result-format";
+export type { ResultDisplayFormat } from "@eureka-atlas/result-format";
+
 export type SemanticCatalogInfo = {
   id: string;
   name: string;
@@ -97,6 +100,9 @@ export type SemanticSearchCoverage = {
 };
 
 export type SemanticSearchCandidate = {
+  description: string;
+  metric_options: Array<{ id: string; name: string; kind: "ATOMIC" | "DERIVED"; aggregation: string | null; formula: string | null; unit: string | null; description: string; usage_notes: string | null }>;
+  metric_options_total: number;
   table_id: string;
   business_name: string;
   physical_name: string;
@@ -120,7 +126,7 @@ export type SemanticSelectableTable = {
     catalog: string;
     schema: string;
   };
-  completeness: SemanticPackage["completeness"];
+  completeness?: SemanticPackage["completeness"];
 };
 
 export type SemanticSelectableTableGroup = {
@@ -190,6 +196,7 @@ export type QueryResultColumn = {
   name: string;
   type: string;
   unit: string | null;
+  display?: ResultDisplayFormat;
 };
 
 export type QueryResult = {

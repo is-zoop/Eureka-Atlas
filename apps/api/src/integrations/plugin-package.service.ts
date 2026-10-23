@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { SystemSettingsService } from "../system-settings/system-settings.service";
 import { buildPluginSkill, buildSkillSnapshot } from "./plugin-skill";
 import { PLUGIN_HOSTS } from "./plugin-host";
-import { EUREKA_CAPABILITIES, EUREKA_PLUGIN_VERSION } from "./eureka-plugin";
+import { EUREKA_CAPABILITIES, EUREKA_COMPOSER, EUREKA_PLUGIN_VERSION } from "./eureka-plugin";
 import { integrationOrigin, selectorUrl } from "./public-origin";
 import { buildMenuSkill } from "./menu-skill";
 import { claudeMenuModule } from "./claude-menu-module";
@@ -147,13 +147,17 @@ package.json 的 pi.skills 指向 ./skills；不声明 pi.mcp。组织插件宿�
 
 宿主须维护组织安装与禁用边界、每用户连接隔离、工具名映射、当前宿主对话与 Atlas session_id 的持久关联。重载或更新不能静默创建新全范围；原范围失效需用户恢复。数据目录使用 open_selection_menu 独立窗口，保存后读取 get_query_session 获取最新 scope_revision；不注册或承诺快捷命令或原生选数面板。MCP 尚未注册或认证未完成时必须明确停止，不使用模型工具自行读取密钥或构造凭证。
 
+## 输入框选用方式
+
+本包声明 extensions.com.eureka.composer.selectionMode=persistent。插件声明选用方式，用户决定是否启用：用户选中后，标签常驻当前对话输入框，后续消息持续使用，直到用户主动移除；未选中或移除后，不得凭历史选择继续使用插件的技能、MCP或宿主能力，仍由宿主核验本轮选择与权限。once 表示仅本条消息使用，发送后清空。本声明不自动选中、安装、查询或启动后台常驻进程，不授予额外权限，也不改变 Atlas 业务会话及选数的持久化方式。
+
 ## 宿主能力 · 问题澄清
 
 Eureka 已支持通过 capabilities.requestUserInput 声明问题澄清能力，本包声明为 true。安装准备与详情会显示“宿主能力 · 问题澄清”。这是 Eureka 的 request_user_input 工具，不是 Atlas MCP 工具，不在 mcp.json 注册，也不附加脚本。宿主仍按本轮实际插件入口或所属 Skill 路径、来源 Haze、能力 ID、加载包摘要、登录身份和工具权限决定是否开放。仅安装或在普通文本中提到插件，不代表本轮获权；常规设置中的日常澄清开关不控制插件声明，完全禁用工具也不会被声明自动恢复。
 
 atlas-ask 先读取业务规则、已有会话与语义口径，仅在缺失信息会显著改变结果时提问。提问成功后停止并等待宿主继续，不重复普通文字提问或提前查数；支持自定义答案与跳过，但跳过不等于同意默认值。回答后保留原 Atlas session_id、scope_revision 和选数状态。宿主未提供工具时退回普通文字询问必要信息，不假装展示卡片。atlas-menu 仍走目录页面，选表不改为问答卡片。
 
-Eureka 版独立版本为 ${EUREKA_PLUGIN_VERSION}；plugin.json、package.json、atlas-release.json 及 Haze 发布版本必须一致。管理员上传时将 Haze 版本填写为 ${EUREKA_PLUGIN_VERSION}，更新安装后活动会话需在空闲时显式重载；不自动更新，不因重载丢弃原业务会话。Codex、Claude 保持原版本与内容。
+Eureka 版独立版本为 ${EUREKA_PLUGIN_VERSION}；plugin.json、package.json、atlas-release.json 及 Haze 发布版本必须一致。管理员上传时将 Haze 版本填写为 ${EUREKA_PLUGIN_VERSION}，更新安装后活动会话需在空闲时显式重载；不自动更新，不因重载丢弃原业务会话。该宿主澄清能力仅适用于 Eureka；三端共享查询、展示与等待规范。
 
 此 ZIP 供管理员手动上传 Haze 插件市场；本次未上传或发布，尚未完成真实安装与查询联调。“入口调用 → 歧义澄清 → 原业务会话继续查询”仍需真实验证，离线包与模拟测试不能代替。离线包校验不替代实际 Eureka 安装、认证与查询验证。本包不提供历史版本管理、回滚或自动更新。
 `
@@ -166,7 +170,11 @@ Eureka 版独立版本为 ${EUREKA_PLUGIN_VERSION}；plugin.json、package.json�
 
 ## 查询
 
-先检索，再获取Package，再确认必要日期和真实候选值。提交返回任务ID，轮询成功后读取实际结果；停止等待不等于取消。结果上限5000行/5MiB，默认100行；候选值默认50/最多200。每用户每分钟60次请求（包括MCP协议及工具调用）、最多3个未结束语义查询，REST与MCP共用额度，遵守重试提示。实时Haze鉴权，ADMIN/SYSTEM_ADMIN/DEVELOPER/USER均可使用本人个人凭证访问MCP。插件管理页面及下载仍仅ADMIN/SYSTEM_ADMIN可访问；选数授权只允许个人凭证所属用户编辑本人的会话。共享凭证不能隔离不同最终用户。实际查询可能产生MaxCompute费用。
+全选只表示可检索范围，不是确认来源。对多个合理业务来源，比较用途、来源、粒度及指标口径后仍有歧义时必须让用户选择；明确来源不重复问，无卡片工具用文字询问并等待，不默认合并不同粒度。原子AVG率与派生汇总比值不得仅按名称视为相同指标。选择后保留原业务会话、范围版本和选数，不新增强制服务端确认门禁。
+
+实际成功结果优先使用 presentation 表格，文字用于结论与汇总解释；网页避免重复结果卡片表格的规则不适用于插件。Server-Timing/timings_ms 仅报告 Atlas 内部 auth、scope、packages、submit、wait、result 与 tool 耗时，不含 Eureka 调度、其凭证进程或模型耗时；各项有嵌套关系，不可简单相加。
+
+先检索，再获取Package，再确认必要日期和真实候选值。提交默认短时等待，成功时直接使用 result 和 presentation；未完成沿用任务ID调用 get_query_result 有界等待（wait_ms 默认8000、最大10000，0立即返回），不运行终端 sleep，不重复提交。停止等待不等于取消。原始结果上限5000行/5MiB，默认100行；额外格式化展示最多100行/32768字符，展示截断与原结果截断分别说明。仅按已有unit展示：%乘100，‰乘1000，万元除10000，亿元除100000000，其他万/亿数量单位按对应倍率换算；小数/百分比默认2位，不新增需维护的尺度/精度字段。presentation已经换算，不二次转换；原始结果和SQL公式保持不变。候选值默认50/最多200。每用户每分钟60次请求（包括MCP协议及工具调用）、最多3个未结束语义查询，REST与MCP共用额度，遵守重试提示。实时Haze鉴权，ADMIN/SYSTEM_ADMIN/DEVELOPER/USER均可使用本人个人凭证访问MCP。插件管理页面及下载仍仅ADMIN/SYSTEM_ADMIN可访问；选数授权只允许个人凭证所属用户编辑本人的会话。共享凭证不能隔离不同最终用户。实际查询可能产生MaxCompute费用。
 
 ## 更新和卸载
 
@@ -257,6 +265,7 @@ policy:
               displayName: "Atlas数据助手",
               icon: "./assets/atlas.png",
               auth: { atlas: { provider: "haze-personal-credential" } },
+              composer: EUREKA_COMPOSER,
               capabilities: EUREKA_CAPABILITIES,
             },
           },

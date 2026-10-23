@@ -7,8 +7,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # Keep network package installation separate so certificate work is cached and
 # npm reports the actual request or lifecycle script instead of appearing idle.
+# Explicit deployment choice, inherited by workspace; no automatic registry fallback.
+ARG NPM_REGISTRY=https://registry.npmjs.org/
 RUN node --version && npm --version \
-    && npm install --global pnpm@11.19.0 \
+    && npm install --global pnpm@11.19.0 --registry="$NPM_REGISTRY" \
         --no-audit --no-fund --loglevel=verbose --foreground-scripts \
         --fetch-retries=1 --fetch-timeout=60000
 
@@ -23,19 +25,24 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/config/package.json packages/config/package.json
 COPY packages/database/package.json packages/database/package.json
 COPY packages/types/package.json packages/types/package.json
+COPY packages/result-format/package.json packages/result-format/package.json
 # Prisma engines are downloaded separately from npm. Override only at build time
 # when the official binary host is unreachable; keep TLS and checksum validation.
 ARG PRISMA_ENGINES_MIRROR=https://binaries.prisma.sh
 # These options apply to pnpm registry requests, not npm bootstrap or Prisma downloads.
 # The official Node image already includes matching headers under /usr/local.
-# Compile native addons against them instead of downloading the headers again.
+# pnpm strips inherited npm_package_* variables from dependency scripts, so pass
+# node-gyp's nodedir via npm_config_* to compile without downloading headers.
+# Retain metadata across failed installs as well as downloaded package contents.
 RUN --mount=type=cache,id=atlas-pnpm,target=/pnpm/store \
+    --mount=type=cache,id=atlas-pnpm-metadata,target=/pnpm/cache,sharing=locked \
     test -f /usr/local/include/node/node.h \
     && test -f /usr/local/include/node/common.gypi \
     && test -f /usr/local/include/node/config.gypi \
-    && npm_package_config_node_gyp_nodedir=/usr/local \
+    && npm_config_nodedir=/usr/local \
+    npm_config_registry="$NPM_REGISTRY" \
     PRISMA_ENGINES_MIRROR="$PRISMA_ENGINES_MIRROR" DEBUG="prisma:download,prisma:fetch-engine*" \
-    pnpm --reporter=append-only --filter @eureka-atlas/api... --filter @eureka-atlas/web... install --frozen-lockfile --store-dir /pnpm/store \
+    pnpm --reporter=append-only --filter @eureka-atlas/api... --filter @eureka-atlas/web... install --frozen-lockfile --store-dir /pnpm/store --cache-dir=/pnpm/cache --registry="$NPM_REGISTRY" \
         --network-concurrency=4 --fetch-timeout=180000 --fetch-retries=3 \
         --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=60000
 COPY apps/api ./apps/api
@@ -45,7 +52,8 @@ COPY packages ./packages
 RUN PRISMA_ENGINES_MIRROR="$PRISMA_ENGINES_MIRROR" DEBUG="prisma:download,prisma:fetch-engine*" \
     DATABASE_URL=postgresql://atlas:build-only@127.0.0.1:5432/atlas \
     pnpm --filter @eureka-atlas/database exec prisma generate --schema prisma/schema.prisma \
-    && pnpm --filter @eureka-atlas/database build
+    && pnpm --filter @eureka-atlas/database build \
+    && pnpm --filter @eureka-atlas/result-format build
 
 FROM workspace AS api-build
 RUN pnpm --filter @eureka-atlas/api build

@@ -19,7 +19,7 @@ test('Eureka ZIP declares connection-layer auth and Pi skill discovery without e
   const read = name => strFromU8(files[root + name]), json = name => JSON.parse(read(name));
   assert.deepEqual(Object.keys(files).sort(), ['plugin.json','package.json','mcp.json','skills/atlas-ask/SKILL.md','skills/atlas-menu/SKILL.md','references/current-rules.md','assets/atlas.png','assets/atlas.svg','assets/LUCIDE-LICENSE.txt','atlas-release.json','README.md'].map(n => root+n).sort());
   assert.equal(artifact.sha256, createHash('sha256').update(artifact.buffer).digest('hex'));
-  assert.match(artifact.filename, /^atlas-ask-eureka-2\.3\.0-[a-f0-9]{12}\.zip$/);
+  assert.match(artifact.filename, /^atlas-ask-eureka-2\.4\.2-[a-f0-9]{12}\.zip$/);
   const manifest = json('plugin.json'), pkg = json('package.json'), mcp = json('mcp.json'), release = json('atlas-release.json');
   check(require('./fixtures/agent-plugins-1.0-plugin.json'), manifest);
   check(require('./fixtures/agent-plugins-1.0-mcp.json'), mcp);
@@ -28,7 +28,7 @@ test('Eureka ZIP declares connection-layer auth and Pi skill discovery without e
   assert.deepEqual(pkg.keywords, ['pi-package']); assert.deepEqual(pkg.pi, { skills: ['./skills'] });
   for(const dir of pkg.pi.skills) assert.ok(Object.keys(files).some(n => n.startsWith(root+dir.slice(2)+'/') && n.endsWith('/SKILL.md')));
   assert.deepEqual(mcp.mcpServers, { atlas: { type: 'streamable-http', url: info.mcp_url } });
-  assert.deepEqual(manifest.extensions, { 'com.eureka': { schemaVersion: 1, displayName: 'Atlas数据助手', icon: './assets/atlas.png', auth: { atlas: { provider: 'haze-personal-credential' } }, capabilities: {requestUserInput:true} } });
+  assert.deepEqual(manifest.extensions, { 'com.eureka': { schemaVersion: 1, displayName: 'Atlas数据助手', icon: './assets/atlas.png', auth: { atlas: { provider: 'haze-personal-credential' } }, composer: {selectionMode:'persistent'}, capabilities: {requestUserInput:true} } });
   const declaration = manifest.extensions['com.eureka'];
   assert.deepEqual(Object.keys(declaration.auth), Object.keys(mcp.mcpServers)); assert.ok(files[root+declaration.icon.slice(2)]);
   assert.equal(release.client, 'eureka'); assert.equal(release.version, manifest.version); assert.equal(release.rules_version, info.rules_version); assert.equal(release.mcp_url, info.mcp_url); assert.ok(Number.isFinite(Date.parse(release.generated_at)));

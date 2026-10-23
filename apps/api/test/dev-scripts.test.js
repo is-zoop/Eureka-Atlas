@@ -15,6 +15,6 @@ test("combined development retains web hot reload and independent manual API bui
   assert.equal(root.scripts.dev, "pnpm --parallel --filter @eureka-atlas/web --filter @eureka-atlas/api dev");
   assert.equal(root.scripts["dev:web"], "pnpm --filter @eureka-atlas/web dev");
   assert.equal(root.scripts["dev:api"], "pnpm --filter @eureka-atlas/api start");
-  assert.equal(root.scripts["build:api"], "pnpm --filter @eureka-atlas/api build");
+  assert.equal(root.scripts["build:api"], "pnpm --filter @eureka-atlas/result-format build && pnpm --filter @eureka-atlas/api build");
   assert.equal(web.scripts.dev, "next dev");
 });

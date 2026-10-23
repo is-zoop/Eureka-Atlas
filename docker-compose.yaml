@@ -27,6 +27,7 @@ services:
       dockerfile: Dockerfile
       target: migrate
       args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"
         PRISMA_ENGINES_MIRROR: "${PRISMA_ENGINES_MIRROR:-https://binaries.prisma.sh}"
     restart: "no"
     init: true
@@ -44,6 +45,7 @@ services:
       dockerfile: Dockerfile
       target: api
       args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"
         PRISMA_ENGINES_MIRROR: "${PRISMA_ENGINES_MIRROR:-https://binaries.prisma.sh}"
     restart: unless-stopped
     init: true
@@ -86,6 +88,7 @@ services:
       dockerfile: Dockerfile
       target: web
       args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org/}"
         PRISMA_ENGINES_MIRROR: "${PRISMA_ENGINES_MIRROR:-https://binaries.prisma.sh}"
     restart: unless-stopped
     init: true

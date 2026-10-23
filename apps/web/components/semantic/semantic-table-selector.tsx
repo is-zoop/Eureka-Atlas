@@ -76,7 +76,7 @@ export function SemanticTableSelector({ tables, value, onValueChange, disabled =
             <div className="divide-y divide-slate-100">{group.tables.map((table) => <label key={table.id} className={cn("flex cursor-pointer items-start gap-3 px-3 py-3 transition-colors hover:bg-slate-50", disabled && "cursor-not-allowed opacity-60")}>
               <Checkbox checked={selected.has(table.id)} disabled={disabled} onCheckedChange={(checked) => setTables([table.id], checked === true)} className="mt-0.5" />
               <Database className="mt-0.5 size-4 shrink-0 text-slate-400" />
-              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{table.business_name}</span><span className="mt-0.5 block truncate text-xs text-slate-500">{table.physical_name}{showSourceDetails && <> · {table.source.name} · {tableLocation(table) || "未填写数据库位置"}</>}</span>{table.completeness.status === "INCOMPLETE" && <span className="mt-1 block text-xs text-amber-700">语义待补充 {table.completeness.issues.length} 项</span>}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{table.business_name}</span><span className="mt-0.5 block truncate text-xs text-slate-500">{table.physical_name}{showSourceDetails && <> · {table.source.name} · {tableLocation(table) || "未填写数据库位置"}</>}</span>{table.completeness?.status === "INCOMPLETE" && <span className="mt-1 block text-xs text-amber-700">语义待补充 {table.completeness.issues.length} 项</span>}</span>
             </label>)}</div>
           </div>;
         })}

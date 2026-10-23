@@ -27,7 +27,9 @@ export class AuthGuard implements CanActivate {
     if (!external && this.reflector.getAllAndOverride<boolean>(PUBLIC_ROUTE, [context.getHandler(), context.getClass()])) return true;
     response.setHeader("Cache-Control", "no-store");
     try {
+      const authStart = performance.now();
       request.authUser = external ? await this.auth.authenticateCredential(request) : await this.auth.authenticate(request);
+      request.authElapsedMs = Math.round((performance.now() - authStart) * 100) / 100;
       const permission = this.reflector.getAllAndOverride<AtlasPermission>(REQUIRED_PERMISSION, [context.getHandler(), context.getClass()]);
       const { hasPermission } = await import("@eureka-atlas/types");
       if (!permission || !hasPermission(request.authUser.role_code, permission)) {

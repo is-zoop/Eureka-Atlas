@@ -32,7 +32,7 @@ test('client-specific ZIPs contain only native configuration and the same shared
   assert.equal(calls, 4, 'one effective prompt read per info/package generation');
   for (const p of ['skills/atlas-ask/SKILL.md', 'references/current-rules.md', 'skills/atlas-menu/SKILL.md']) for(const client of ['claude','eureka']) assert.equal(packages.codex.read(p).split('\n## 当前宿主操作')[0], packages[client].read(p).split('\n## 当前宿主操作')[0]);
   const portable = JSON.parse(packages.codex.read('plugin.json')), claude = JSON.parse(packages.claude.read('.claude-plugin/plugin.json'));
-  assert.equal(portable.name, claude.name); assert.equal(portable.version, claude.version); assert.equal(portable.version,'2.2.1'); assert.equal(info.title,'Atlas数据助手'); assert.equal(portable.extensions['com.openai'].interface.displayName,'Atlas数据助手'); assert.ok(portable.extensions['com.openai'].interface.shortDescription.length <= 30);
+  assert.equal(portable.name, claude.name); assert.equal(portable.version, claude.version); assert.equal(portable.version,'2.3.1'); assert.equal(info.title,'Atlas数据助手'); assert.equal(portable.extensions['com.openai'].interface.displayName,'Atlas数据助手'); assert.ok(portable.extensions['com.openai'].interface.shortDescription.length <= 30);
   check(require('./fixtures/agent-plugins-1.0-plugin.json'), portable);
   const presentation=portable.extensions['com.openai'].interface;
   assert.equal(presentation.logo,'./assets/atlas.png'); assert.equal(presentation.composerIcon,presentation.logo);

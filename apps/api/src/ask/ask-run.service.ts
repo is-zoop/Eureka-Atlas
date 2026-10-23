@@ -380,13 +380,13 @@ export class AskRunService implements OnModuleInit {
     const queryParameters = askQueryParameters(Type);
     const searchParameters = askSearchParameters(Type, scopeDataDomains(scope.packages.values()));
     const textResult = (value: unknown, terminate = false) => ({ content: [{ type: "text", text: JSON.stringify(value) }], details: value, ...(terminate ? { terminate: true } : {}) });
-    const scopeFor = async () => {
+    const scopeFor = async (includePackages = true) => {
       await this.assertRunOwnership(memberNo, runId);
       const run = await prisma.askRun.findUniqueOrThrow({ where: { id: runId } });
-      return { run, scope: await this.scopeService.resolve(run.tableIds) };
+      return { run, scope: await this.scopeService.resolve(run.tableIds, includePackages) };
     };
     const freshPackage = async (tableId: string) => {
-      const { run, scope } = await scopeFor();
+      const { run, scope } = await scopeFor(false);
       const pkg = await this.scopeService.package(scope, tableId);
       const versions = run.packageVersions as Record<string, string>;
       if (versions[tableId] && versions[tableId] !== pkg.content_version) throw new BadRequestException("该表的正式语义已更新，请先重新读取语义并确认口径");
@@ -401,7 +401,7 @@ export class AskRunService implements OnModuleInit {
         return textResult({ query_ids: ids, charts });
       } },
       { name: "search_semantic_assets", description: "在本次已选表内按业务词、指标和维度搜索正式语义资产。", parameters: searchParameters, execute: async (_: string, input: any) => { const { scope } = await scopeFor(); const domains = scopeDataDomains(scope.packages.values()); if (input.data_domain && !domains.includes(input.data_domain)) throw new BadRequestException("数据域不在当前可查询表中；请使用真实数据域或省略 data_domain。"); const result = searchSemanticPackages([...scope.packages.values()], input); await this.events.publish(runId, "progress", { step: "搜索语义资产", total: result.total }); return textResult(result); } },
-      { name: "get_semantic_package", description: "读取某张候选表的正式语义 Package。table_id 必须来自搜索结果或已选表。", parameters: Type.Object({ table_id: Type.String() }), execute: async (_: string, input: any) => { const { run, scope } = await scopeFor(); const pkg = await this.scopeService.package(scope, string(input.table_id)); await prisma.askRun.update({ where: { id: runId }, data: { packageVersions: { ...(run.packageVersions as object), [pkg.table.id]: pkg.content_version } as Prisma.InputJsonValue } }); await this.events.publish(runId, "progress", { step: "读取正式语义", table_id: pkg.table.id }); return textResult(pkg); } },
+      { name: "get_semantic_package", description: "读取某张候选表的正式语义 Package。table_id 必须来自搜索结果或已选表。", parameters: Type.Object({ table_id: Type.String() }), execute: async (_: string, input: any) => { const { run, scope } = await scopeFor(false); const pkg = await this.scopeService.package(scope, string(input.table_id)); await prisma.askRun.update({ where: { id: runId }, data: { packageVersions: { ...(run.packageVersions as object), [pkg.table.id]: pkg.content_version } as Prisma.InputJsonValue } }); await this.events.publish(runId, "progress", { step: "读取正式语义", table_id: pkg.table.id }); return textResult(pkg); } },
       { name: "get_dimension_values", description: "查询已开启候选值的维度真实取值，用于消除名称歧义。", parameters: queryParameters.dimensionValues, execute: async (_: string, input: any) => { const pkg = await freshPackage(string(input.table_id)); const request = { ...input, idempotency_key: `${runId}:dimension:${live.guard.totalTools}`, table_id: string(input.table_id), field_id: string(input.field_id), keyword: string(input.keyword) || undefined, limit: Number(input.limit) || 50 } as DimensionValuesRequest; const execution = await this.queries.dimensionValuesPackage(memberNo, pkg, request); await this.linkQuery(runId, execution.id); const done = await this.waitForQuery(memberNo, runId, execution.id, live.abort.signal); await this.saveResult(memberNo, runId, pkg, request, done); return textResult(this.querySummary(done)); } },
       { name: "query_data", description: "按正式语义执行一张表的聚合、分组、趋势或排行查询。只能提交字段和指标 ID，不能提交 SQL。", parameters: queryParameters.query, execute: async (_: string, input: any) => { const pkg = await freshPackage(string(input.table_id)); const request = { ...input, idempotency_key: `${runId}:query:${live.guard.totalTools}`, table_id: string(input.table_id) } as QueryRequest; const execution = await this.queries.submitPackage(memberNo, pkg, request); await this.linkQuery(runId, execution.id); await this.events.publish(runId, "progress", { step: "执行数据查询", query_id: execution.id }); const done = await this.waitForQuery(memberNo, runId, execution.id, live.abort.signal); await this.saveResult(memberNo, runId, pkg, request, done); return textResult(this.querySummary(done)); } },
       {

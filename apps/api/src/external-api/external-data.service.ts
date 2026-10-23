@@ -31,6 +31,8 @@ export class ExternalDataService {
     });
   }
 
+  async snapshot(memberNo: string, id: string) { return this.task(await this.queries.semanticSnapshot(memberNo, id)); }
+
   async status(memberNo: string, id: string) { return this.task(await this.queries.semanticGet(memberNo, id)); }
   async cancel(memberNo: string, id: string) { return this.task(await this.queries.semanticCancel(memberNo, id)); }
 

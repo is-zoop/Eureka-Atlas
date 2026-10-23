@@ -10,15 +10,20 @@ export type SemanticScope = { tableIds: string[]; packages: Map<string, Semantic
 export class SemanticScopeService {
   constructor(private readonly selectable: SelectableSemanticTablesService, private readonly packages: PackageService) {}
 
-  async resolve(requested: unknown): Promise<SemanticScope> {
+  async resolve(requested: unknown, includePackages = true): Promise<SemanticScope> {
     const selectedIds = [...new Set(Array.isArray(requested) ? requested.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [])];
     const available = new Set((await this.selectable.list()).items.map(item => item.id));
     const ids = selectedIds.length ? selectedIds : [...available];
     if (!ids.length) throw new BadRequestException("暂无可查询表，请先完成数据表治理并发布语义");
     const invalid = ids.filter(id => !available.has(id));
     if (invalid.length) throw new BadRequestException(`已选择表不可查询或已失效：${invalid.join(", ")}`);
-    const entries = await Promise.all(ids.map(async id => [id, await this.packages.get(id)] as const));
-    return { tableIds: ids, packages: new Map(entries) };
+    return includePackages ? this.loadPackages(ids) : { tableIds: ids, packages: new Map() };
+  }
+
+  /** Internal use after scope/eligibility has been resolved; Package.get still validates current publication. */
+  async loadPackages(tableIds: string[]): Promise<SemanticScope> {
+    const entries = await Promise.all(tableIds.map(async id => [id, await this.packages.get(id)] as const));
+    return { tableIds, packages: new Map(entries) };
   }
 
   async queryablePackage(tableId: string, expectedVersion?: string) {

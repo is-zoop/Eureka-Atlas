@@ -1,4 +1,5 @@
 import type { AskChartSpec, QueryResult } from "@eureka-atlas/types";
+import { convertUnitValue } from "@eureka-atlas/result-format";
 
 export const chartColors = ["#3b82f6", "#14b8a6", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4", "#84cc16", "#ec4899", "#f97316", "#6366f1", "#0f766e", "#a855f7", "#ca8a04", "#e11d48", "#0284c7", "#65a30d", "#c026d3", "#c2410c", "#4f46e5", "#475569"];
 export const chartTypes = [{ value: "line", label: "折线图" }, { value: "bar", label: "柱状图" }, { value: "pie", label: "饼图" }];
@@ -27,12 +28,13 @@ export function chartData(result: QueryResult, spec: AskChartSpec): ChartData {
   let error = "";
   const points = result.rows.map((row): ChartPoint => ({
     label: labelFor(row[spec.x_column], result.columns[spec.x_column]),
-    raw: spec.y_columns.map((index) => row[index] === null ? "NULL" : String(row[index])),
+    raw: spec.y_columns.map((index) => row[index] === null ? "NULL" : convertUnitValue(String(row[index]), result.columns[index].unit)),
     values: spec.y_columns.map((index) => {
       const raw = row[index];
       if (raw === null) return null;
       if ((typeof raw !== "number" && typeof raw !== "string") || !decimal.test(String(raw)) || !Number.isFinite(Number(raw))) { error = "指标包含无法绘图的值，请使用表格查看。"; return null; }
-      const value = Number(raw);
+      const value = Number(convertUnitValue(raw, result.columns[index].unit));
+      if (!Number.isFinite(value)) { error = "指标换算后超出图表数值范围，请使用表格查看。"; return null; }
       count++;
       if (value > 0) positive = true;
       if (spec.type === "pie" && value < 0) error = "饼图不支持负值，请切换为柱状图。";

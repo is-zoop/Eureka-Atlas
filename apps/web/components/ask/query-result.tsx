@@ -5,6 +5,7 @@ import type { AskChartSpec, AskSavedQueryResult } from "@eureka-atlas/types";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table } from "@/components/ui/table";
+import { formatResultCell, resultColumnLabel } from "@eureka-atlas/result-format";
 import { QueryVisualization } from "./query-visualization";
 
 const numeric = (type: string) => /^(tinyint|smallint|int|integer|bigint|float|double|decimal|numeric|number|real)/i.test(type);
@@ -24,8 +25,8 @@ export function QueryResult({ saved, chart, status, error, queryError, onRefresh
     <QueryVisualization saved={saved} preferred={chart} onDownload={onDownload}>
     <div className="ask-table-wrap">
       <Table containerClassName="ask-table-scroll h-auto rounded-none border-0" className="ask-data-table">
-        <thead><tr>{columns.map((column, index) => <th key={index} style={{ textAlign: numeric(column.type) ? "right" : "left" }}>{column.name}</th>)}</tr></thead>
-        <tbody>{rows.length ? rows.slice(currentPage * 50, (currentPage + 1) * 50).map((row, index) => <tr key={index}>{row.map((value, column) => <td key={column} style={{ textAlign: numeric(columns[column]?.type ?? "") ? "right" : "left" }}>{value === null ? <span className="text-slate-400">NULL</span> : String(value)}</td>)}</tr>) : <tr><td colSpan={Math.max(columns.length, 1)} className="text-center text-slate-400">没有符合条件的数据</td></tr>}</tbody>
+        <thead><tr>{columns.map((column, index) => <th key={index} style={{ textAlign: numeric(column.type) ? "right" : "left" }}>{resultColumnLabel(column)}</th>)}</tr></thead>
+        <tbody>{rows.length ? rows.slice(currentPage * 50, (currentPage + 1) * 50).map((row, index) => <tr key={index}>{row.map((value, column) => <td key={column} style={{ textAlign: numeric(columns[column]?.type ?? "") ? "right" : "left" }}>{value === null ? <span className="text-slate-400">—</span> : formatResultCell(value, columns[column])}</td>)}</tr>) : <tr><td colSpan={Math.max(columns.length, 1)} className="text-center text-slate-400">没有符合条件的数据</td></tr>}</tbody>
       </Table>
     </div>
     {pages > 1 && <div className="flex items-center justify-end gap-2 text-xs text-slate-500"><span>共 {rows.length} 行 · {currentPage + 1}/{pages}</span><Button size="sm" variant="ghost" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>上一页</Button><Button size="sm" variant="ghost" disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}>下一页</Button></div>}

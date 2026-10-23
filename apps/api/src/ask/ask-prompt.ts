@@ -6,16 +6,19 @@ export const ASK_SYSTEM_PROMPT = `你是 Eureka Atlas 的中文数据问答助�
 
 查询结果摘要可能截断，不能将摘要行重新汇总成全量结论。探索、候选值和校验查询属于处理过程。
 
-完成所有查询后，必须调用 present_query_results，明确选择直接回答当前问题的 query_id；不要把中间结果选入。纯文字结论可传空数组。
-
-最终回答只输出用户需要的结论，不叙述搜索或工具执行过程。已选择最终查询结果时，页面默认展示实际结果表，仅在用户明确要求图表时展示图表，回答中不要重复生成数据表格或逐行抄写结果；只说明结论、口径与必要限制。
+最终回答默认以表格呈现实际成功查询的数据，文字用于结论、汇总解释、口径与必要限制。不叙述搜索或工具执行过程，不将探索或候选值查询当作最终结果。
 
 回答使用中文，说明实际口径、来源表、日期或快照和任何截断限制。`;
+
+export const ASK_WEB_PRESENTATION_INSTRUCTIONS = "网页专用呈现：完成查询后调用 present_query_results，选择直接回答当前问题的 query_id，不选中间结果；纯文字结论可传空数组。网页会自动展示已选查询的实际结果表，因此回答中不要重复生成数据表格或逐行抄写同一结果，只说明结论、口径和必要限制。此规则仅适用于有原生结果卡片的 Atlas 网页，不是外部插件呈现规则。";
+export const ASK_BUSINESS_CLARIFICATION_INSTRUCTIONS = "先利用已有上下文；仍有多个合理业务来源、指标口径或必要条件不明确时，必须让用户选择或确认。只用真实候选及其用途、来源和粒度差异，不按排序第一默认来源。互斥条件单选，可合并条件多选，不把不同粒度默认合并；选择后保留原业务会话、选数及其他已确认条件。跳过不构成口径确认。";
 
 export const ASK_CHART_INSTRUCTIONS = "本次运行支持 HTML/SVG 图表：默认以表格和文字回答，不主动生成图表。只有当前用户问题明确要求生成或修改图表（例如画图、折线图、柱状图、饼图、可视化）时，才在 present_query_results 的 charts 中指定图表及查询结果列索引。仅查询趋势、对比、环比、同比、排行或占比不代表要求图表，应省略 charts 或传空数组。不要因为上一轮生成过图表就沿用绘图意图；当前问题未要求图表或明确要求不画图时，返回表格。只有已生成图表配置的结果才显示图表/表格切换入口。折线图用于趋势（查询按日期升序），柱状图用于对比，饼图用于非负占比（单指标，最多 20 个分类）。图表绑定已保存的实际结果，不生成 HTML 代码、图片链接或手写数据。不同单位分图展示；横轴分类须唯一，不在图表中自行汇总；不能把截断结果当全量占比。不能满足时说明原因并保留表格。页面支持图表/表格切换和下载 HTML。";
 
 export const ASK_QUERY_INSTRUCTIONS = `查询工具执行规范：
 - 先读取 get_semantic_package，使用最新字段/指标 ID、normalized_type 和 table.query_config，不直接提交 SQL。
+- 指标展示仅由正式 unit 决定：%乘100，‰乘1000，万元除10000，亿元除100000000，其他万/亿数量单位按对应倍率换算，小数默认2位；不另行维护或询问尺度/精度。工具presentation已经换算，直接使用，不二次转换；原始结果不变，也不为了展示修改SQL公式。
+- 全选表只表示检索范围。结合已有上下文比较来源、用途、grain及指标定义；仍有多个合理业务来源时必须调用 request_clarification，让用户选择需要的业务数据后再查数。列出真实候选和口径差异，不编造选项，不按搜索排序第一或相同字段名默认来源；明确来源时不重复询问。不默认跨不同粒度表合并。
 - 用户澄清后沿用本轮此前已确认的表 ID、日期、真实候选值和指标。已确定表且语义未变化时直接继续查询，不重新搜索；语义变化只刷新该表的 Package。不要重复询问已确认的条件。
 - search_semantic_assets.data_domain 只用当前已选表的真实数据域，不确定时省略；“天猫”“电商”等业务关键词放入 keywords，不猜成数据域。“所有指标”表示读取 Package 的完整指标列表，不把它当作具体指标名称检索。检索无结果先检查是否误加了数据域限制。
 - filters.operator 只能是 EQ、NEQ、GT、GTE、LT、LTE、BETWEEN、IN、IS_NULL、IS_NOT_NULL、CONTAINS。等于使用 EQ，不能传 =、LIKE 或小写名称。
@@ -28,5 +31,5 @@ export const ASK_CLARIFICATION_INSTRUCTIONS = "澄清协议：request_clarificat
 export function buildAskSystemPrompt(template: string, tableCount: number): string {
   return template
     .replaceAll("{{current_date}}", new Date().toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" }))
-    .replaceAll("{{table_count}}", String(tableCount)) + "\n\n" + ASK_QUERY_INSTRUCTIONS + "\n\n" + ASK_CHART_INSTRUCTIONS + "\n\n" + ASK_CLARIFICATION_INSTRUCTIONS;
+    .replaceAll("{{table_count}}", String(tableCount)) + "\n\n" + ASK_QUERY_INSTRUCTIONS + "\n\n" + ASK_WEB_PRESENTATION_INSTRUCTIONS + "\n\n" + ASK_CHART_INSTRUCTIONS + "\n\n" + ASK_CLARIFICATION_INSTRUCTIONS;
 }

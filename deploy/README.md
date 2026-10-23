@@ -147,6 +147,30 @@ docker run --rm node:24-bookworm-slim \
 
 如果失败位置是 `pnpm ... install --frozen-lockfile`，并出现 `TimeoutError: The operation was aborted due to timeout`，先区分 npm 引导安装、pnpm 仓库请求和依赖安装脚本的独立下载。`Lockfile passes supply-chain policies` 表示该轮策略检查通过，不等于整个安装已经成功，也不能仅凭随后的一条通用超时确定具体请求地址。构建失败时，`build ... && up ...` 不会执行后面的容器更新；迁移成功同样不代表新 API/Web 镜像构建成功。
 
+若日志为 `Lockfile failed supply-chain policy check`，同时明确出现请求超时和 `ERR_PNPM_BROKEN_METADATA_JSON: The operation was aborted due to timeout`，说明该轮供应链元数据检查因网络读取超时中止，不等于锁文件已损坏或已检测到恶意依赖。不要删锁文件、关闭供应链检查或反复等待40分钟。
+
+Dockerfile 现在支持显式构建参数 `NPM_REGISTRY`（默认 `https://registry.npmjs.org/`），同时作用于 npm 引导安装 pnpm、pnpm 安装及其子脚本的 npm 配置。不自动切源、不持久化私有仓库凭据；只选择你信任的 HTTPS 仓库。`--build-arg` 必须配合上传后的最新 Dockerfile，改宿主机 npm 配置不等于改了构建环境。
+
+先在服务器上对候选源做一次30秒、无重试的元数据测试；下面以可选公共镜像为例，并非已验证该源在你的服务器可达：
+
+```bash
+docker run --rm node:24-bookworm-slim \
+  npm view react name --registry=https://registry.npmmirror.com/ \
+  --fetch-timeout=30000 --fetch-retries=0
+```
+
+返回 `react` 后再构建；它只验证这个包的元数据访问，不代表全部包、供应链策略和 BuildKit 网络均已通过：
+
+```bash
+docker compose --env-file .env.docker --progress plain build \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com/ \
+  migrate api web
+```
+
+pnpm 11 的检查还依赖完整的发布时间/信任元数据，并可能访问所选仓库下的 `/-/npm/v1/attestations/…`。镜像缺少这些数据或锁文件有显式的外部下载地址时，单换源仍不能保证成功，应改用可访问官方源的代理或符合策略的内部仓库，不能通过关闭校验绕过。Prisma、Debian和PyPI下载是另外的网络路径，不由NPM_REGISTRY统一代理。
+
+使用代理时，可以给构建额外传入 `--build-arg HTTP_PROXY=http://实际代理IP:端口`、`--build-arg HTTPS_PROXY=http://实际代理IP:端口`。代理必须从构建容器可访问，不能填写容器内的127.0.0.1；若现有NO_PROXY包含npm目标域名，需要调整，否则可能绕过代理。不要把带密码/令牌的代理或仓库URL粘贴进命令、日志或Dockerfile。
+
 Dockerfile 给 pnpm 仓库请求单独设置了 180 秒超时、最多 3 次重试（重试间隔 10–60 秒）、4 个并发请求，以适应较慢网络。npm 全局安装 pnpm 的 `--fetch-timeout` 不会自动应用到这个步骤；`PRISMA_ENGINES_MIRROR` 也不是 npm 包下载源。保留冻结锁文件、供应链策略、TLS、包完整性验证和必需的安装脚本。超时参数不覆盖第三方脚本自建的网络请求，也不能修复不可访问的域名或代理。
 
 上传最新 Dockerfile 后使用原有构建器重试，不加 `--no-cache`。可以在 Bash 中保留完整日志，并让管道正确返回构建失败状态：
@@ -160,15 +184,40 @@ docker compose --env-file .env.docker -f docker-compose.yaml --progress plain bu
 
 如仍失败，查看错误前的请求重试、包名、URL 和安装脚本信息，再检查对应构建网络；不要直接禁用安全检查或把 npm 源与 Prisma 引擎源混为一谈。已经成功执行、且没有新增迁移时，无需为了重试 API/Web 构建再次执行迁移。参考：[pnpm 网络配置](https://pnpm.io/settings/network)。
 
+### 无代理时减少 npm 重复联网
+
+包文件复用与元数据/安全证明查询是不同的缓存。`reused 1482, downloaded 2` 并不意味着后续不会再发包元数据或来源证明请求。Dockerfile 保留已有的 `atlas-pnpm` 包缓存，另外将 pnpm 的 `cacheDir` 显式指向 `/pnpm/cache`，使用独立的 `atlas-pnpm-metadata` BuildKit 缓存挂载；安装失败后也保留其中已经写入的元数据。挂载使用锁保护，并仅在同一项目的受信任构建之间共享。首次挂载没有历史元数据，缓存也不能保证跳过需重新验证的请求或永不联网。
+
+可以选择 npm 仓库镜像来加速元数据与包文件。先在服务器测试完整压缩响应（先前不带 `--compressed` 的 7 MB 下载测试，不能直接等同于 pnpm 实际使用压缩后的速度）：
+
+```bash
+curl --compressed -sS -o /dev/null --connect-timeout 10 --max-time 30 \
+  -w 'HTTP=%{http_code} 总计=%{time_total}s\n' \
+  https://registry.npmmirror.com/react
+```
+
+确认镜像可用后，上传最新 Dockerfile 和 docker-compose.yaml，在服务器原有 `.env.docker` 中添加或修改（不覆盖其他密码和密钥）：
+
+```dotenv
+NPM_REGISTRY=https://registry.npmmirror.com/
+PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
+```
+
+`NPM_REGISTRY` 默认官方源，由三个 Compose 构建目标统一传入，仅用于构建时 npm 引导安装与 pnpm 依赖安装，不注入运行时容器环境。然后执行 `docker compose --env-file .env.docker -f docker-compose.yaml --progress plain build migrate api web`；成功后才进入备份、停机、迁移和更新容器流程。首次改动构建命令或仓库参数会重跑安装层，但原包缓存 ID 保持不变。不要清缓存、换构建器、随意改参数或关闭 TLS、完整性和供应链检查。
+
+镜像不是所有网络问题的替代方案：检查 React 19.2.8 的版本元数据可见，npmmirror 改写了包下载链接，但 `dist.attestations.url` 仍指向 `registry.npmjs.org`；镜像自己的同路径证明接口可能返回 404。固定在锁文件中的绝对 URL 也不一定随仓库选项改变。因此换源只能部分加速，官方证明接口仍可能成为瓶颈。若仍超时，应修复出口网络或在网络正常的机器构建完整镜像后导入服务器，而不是篡改证明 URL 或关闭安全检查。参考：[pnpm cacheDir](https://pnpm.io/settings/other#cachedir)。
+
 ### better-sqlite3 编译下载 Node 头文件超时
 
 如果 Prisma 安装已 `Done`，但 `better-sqlite3 install: node-gyp rebuild` 随后请求 `https://nodejs.org/download/release/.../node-...-headers.tar.gz` 并出现 `ConnectTimeoutError`，失败的是原生模块编译所需的 Node 头文件下载，不是数据库迁移或 Prisma 引擎下载。pnpm 的仓库超时和 Prisma 下载源参数均不控制这个请求。
 
-官方 `node:24-bookworm-slim` 镜像本身包含 `/usr/local/include/node` 下与其 Node 二进制匹配的头文件。Dockerfile 在依赖安装前检查 `node.h`、`common.gypi`、`config.gypi`，并仅在该安装步骤设置 node-gyp 12 推荐的 `npm_package_config_node_gyp_nodedir=/usr/local`。node-gyp 读取本地文件进行真实编译，不再为此请求 nodejs.org；不要通过跳过安装脚本来绕过编译，也不要另装版本可能不匹配的 Debian Node 头文件。
+官方 `node:24-bookworm-slim` 镜像本身包含 `/usr/local/include/node` 下与其 Node 二进制匹配的头文件。Dockerfile 在依赖安装前检查 `node.h`、`common.gypi`、`config.gypi`，并仅在该安装步骤设置 `npm_config_nodedir=/usr/local`。pnpm 11 会过滤继承的 `npm_package_*` 环境变量，所以直接设置 `npm_package_config_node_gyp_nodedir` 并不能传给依赖安装脚本；node-gyp 12.4 支持读取传入的 `npm_config_nodedir`。这一参数传递已用真实 pnpm 离线安装本地依赖、执行其安装脚本并读取 node-gyp 选项验证，而非仅检查 Dockerfile 文本。node-gyp 据此使用本地头文件进行编译，不再为此请求 nodejs.org；不要跳过安装脚本，也不要另装版本可能不匹配的 Debian Node 头文件。
 
 上传最新 Dockerfile 后按上一节的命令重新构建 `api web`，复用现有 pnpm 缓存。此修复不加速供应链检查的 npm 元数据请求，也不处理其他安装脚本自己的网络下载。如果仍失败，按新的第一个错误继续定位，不能把原来的网络错误当作已证明的 Node/SQLite 版本不兼容。迁移已经成功且未新增迁移时，无需重跑迁移。
 
-参考：[node-gyp 12.4 配置](https://github.com/nodejs/node-gyp/blob/v12.4.0/README.md#environment-variables)、[官方 Node 镜像](https://github.com/nodejs/docker-node/blob/main/24/bookworm-slim/Dockerfile)。
+`apps/api/test/node-gyp-lifecycle.test.js` 覆盖上述真实依赖安装流程，正常通过 pnpm 的 `test:unit` 运行以提供当前 pnpm 路径；直接用 Node 运行而未提供 `npm_execpath` 时会明确跳过，不算已验证。此测试验证参数传递，不替代 Linux Docker 中的实际 C++ 编译。日志出现 `gyp http 200` 只表示收到 HTTP 响应头，并不代表头文件下载或编译已完成。
+
+参考：[node-gyp 12.4 参数读取实现](https://github.com/nodejs/node-gyp/blob/v12.4.0/lib/node-gyp.js)、[官方 Node 镜像](https://github.com/nodejs/docker-node/blob/main/24/bookworm-slim/Dockerfile)。
 
 ### 安装停在 Prisma 引擎下载
 

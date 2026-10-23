@@ -126,6 +126,12 @@ export class QueryExecutionService implements OnModuleInit, OnModuleDestroy {
     return existing ? this.replay(existing, input, QueryExecutionKind.SEMANTIC_QUERY,agentSessionId) : null;
   }
 
+  async semanticSnapshot(memberNo: string, id: string) {
+    const item = await this.requireOwned(memberNo, id);
+    if (item.kind !== QueryExecutionKind.SEMANTIC_QUERY) throw new NotFoundException("查询任务不存在");
+    return this.toResponse(item);
+  }
+
   async semanticGet(memberNo: string, id: string) {
     const item = await this.requireOwned(memberNo, id);
     if (item.kind !== QueryExecutionKind.SEMANTIC_QUERY) throw new NotFoundException("查询任务不存在");

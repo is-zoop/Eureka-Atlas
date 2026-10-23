@@ -7,13 +7,14 @@ require('dotenv').config({ path: path.join(root, '.env'), quiet: true });
 
 async function main() {
   const args = process.argv.slice(2);
-  let origin, output = path.join(root, 'artifacts/agent-plugins'), development = false;
+  let origin, output = path.join(root, 'artifacts/agent-plugins'), development = false, client = 'eureka';
   while (args.length) {
     const flag = args.shift();
     if (flag === '--origin' && args[0]) origin = args.shift();
     else if (flag === '--output' && args[0]) output = path.resolve(root, args.shift());
     else if (flag === '--development') development = true;
-    else throw new Error('参数无效。使用 --origin <可信 HTTPS 根地址> [--output <目录>] [--development]。');
+    else if (flag === '--client' && ['codex','claude','eureka','all'].includes(args[0])) client = args.shift();
+    else throw new Error('参数无效。使用 --origin <可信 HTTPS 根地址> [--output <目录>] [--development] [--client codex|claude|eureka|all]。');
   }
   if (!origin) throw new Error('必须显式指定 --origin；正式包使用可信 HTTPS 根地址。');
   process.env.NODE_ENV = development ? 'development' : 'production';
@@ -27,13 +28,17 @@ async function main() {
   let module;
   try {
     module = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    const artifact = await module.get(PluginPackageService).archive('eureka');
-    if (createHash('sha256').update(artifact.buffer).digest('hex') !== artifact.sha256) throw new Error('ZIP 校验失败。');
+    const packages = module.get(PluginPackageService), info = await packages.info(), results = [];
     await fs.mkdir(output, { recursive: true });
-    const target = path.join(output, artifact.filename);
-    await fs.writeFile(target, artifact.buffer);
-    await fs.writeFile(target + '.sha256', artifact.sha256 + '  ' + artifact.filename + '\n');
-    console.log(JSON.stringify({ zip: target, sha256: artifact.sha256, rules_version: artifact.rulesVersion, mcp_url: integrationOrigin() + '/api/mcp', development_only: development }, null, 2));
+    for (const selected of client === 'all' ? ['codex','claude','eureka'] : [client]) {
+      const artifact = await packages.archive(selected, info.rules_version);
+      if (createHash('sha256').update(artifact.buffer).digest('hex') !== artifact.sha256) throw new Error('ZIP 校验失败。');
+      const target = path.join(output, artifact.filename);
+      await fs.writeFile(target, artifact.buffer);
+      await fs.writeFile(target + '.sha256', artifact.sha256 + '  ' + artifact.filename + '\n');
+      results.push({ client:selected,zip: target, sha256: artifact.sha256, rules_version: artifact.rulesVersion, mcp_url: integrationOrigin() + '/api/mcp', development_only: development });
+    }
+    console.log(JSON.stringify(client === 'all' ? results : results[0], null, 2));
   } finally {
     await module?.close();
     await prisma.$disconnect();

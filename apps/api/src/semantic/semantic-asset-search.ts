@@ -51,9 +51,16 @@ export function searchSemanticPackages(packages: SearchPackage[], input: Semanti
     const matched = requestedCoverage.filter((entry) => entry.status === "MATCHED").length;
     const missing = requestedCoverage.filter((entry) => entry.status === "MISSING").length;
     const status = requestedCoverage.length === 0 ? "UNSPECIFIED" : missing === 0 && requestedCoverage.every((entry) => entry.status === "MATCHED") ? "FULL" : "PARTIAL";
-    const candidate: SemanticSearchCandidate = { table_id: item.table.id, business_name: item.table.business_name, physical_name: item.table.name, data_domain: item.table.data_domain, source: item.source, grain: item.table.grain, completeness: item.completeness, match_reasons: reasons, coverage: { status, metrics: metricCoverage, dimensions: dimensionCoverage } };
+    const matchedMetricIds = new Set(metricCoverage.flatMap(entry => entry.matches.map(m => m.asset_id)));
+    const metricOptions = [
+      ...item.fields.filter(field => field.type === "METRIC").map(field => ({id:field.id,name:field.name,kind:"ATOMIC" as const,aggregation:field.aggregation,formula:null,unit:field.unit,description:field.catalog?.description ?? "",usage_notes:field.catalog?.usage_notes ?? null})),
+      ...item.metrics.map(metric => ({id:metric.id,name:metric.name,kind:"DERIVED" as const,aggregation:null,formula:metric.formula,unit:metric.unit,description:metric.catalog?.description ?? "",usage_notes:metric.catalog?.usage_notes ?? null})),
+    ].filter(metric => !metricTerms.length || matchedMetricIds.has(metric.id));
+    const candidate: SemanticSearchCandidate = { description:item.table.description,metric_options:metricOptions.slice(0,12),metric_options_total:metricOptions.length, table_id: item.table.id, business_name: item.table.business_name, physical_name: item.table.name, data_domain: item.table.data_domain, source: item.source, grain: item.table.grain, completeness: item.completeness, match_reasons: reasons, coverage: { status, metrics: metricCoverage, dimensions: dimensionCoverage } };
     return { candidate, matched, missing, exactReasons: reasons.filter((reason) => reason.basis === "EXACT_NAME_OR_ALIAS").length, any: Boolean(reasons.length || matched || requestedCoverage.some((entry) => entry.status !== "MISSING")) };
   }).filter((item) => item.any).sort((left, right) => (Number(right.candidate.coverage.status === "FULL") - Number(left.candidate.coverage.status === "FULL")) || (right.matched - left.matched) || (right.exactReasons - left.exactReasons) || (left.missing - right.missing) || left.candidate.table_id.localeCompare(right.candidate.table_id));
   const pageSize = Math.min(100, Math.max(1, Number(input.page_size) || 20)); const page = Math.max(1, Number(input.page) || 1); const total = candidates.length;
-  return { items: candidates.slice((page - 1) * pageSize, page * pageSize).map((item) => item.candidate), total, page, page_size: pageSize, total_pages: Math.max(1, Math.ceil(total / pageSize)) };
+  const full = candidates.filter(item => item.candidate.coverage.status === "FULL");
+  const reasonableCount = full.length || candidates.length;
+  return { items: candidates.slice((page - 1) * pageSize, page * pageSize).map((item) => item.candidate), total, page, page_size: pageSize, total_pages: Math.max(1, Math.ceil(total / pageSize)), source_resolution: { candidate_count:reasonableCount, requires_context_resolution:reasonableCount>1, instruction:reasonableCount>1 ? "多个候选来源。先结合已确认上下文比较用途、来源、粒度及指标口径；仍有多个合理来源时必须让用户选择，不把排序第一当作已确认。" : "结合用户上下文核对来源；明确来源不重复询问。" } };
 }

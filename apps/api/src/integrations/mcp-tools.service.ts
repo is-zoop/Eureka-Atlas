@@ -3,6 +3,7 @@ import { AgentSessionsService } from "./agent-sessions.service";
 import { contextProperties, readContext } from "./mcp-context";
 import { McpDataService } from "./mcp-data.service";
 import { SelectionAccessService } from "./selection-access.service";
+import type { McpTimings } from "./mcp-timing";
 const sessionIdSchema = contextProperties.session_id;
 @Injectable()
 export class McpToolsService {
@@ -36,7 +37,11 @@ export class McpToolsService {
       },
       {
         name: "open_selection_menu",
-        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: true,
+        },
         description:
           "为当前已有业务会话打开免网页登录的独立选数窗口。服务端加密保存连接凭证，仅用于本对话选数校验；不得在参数中传凭证。启动链接只用于当前会话，不要转发。",
         inputSchema: {
@@ -54,6 +59,7 @@ export class McpToolsService {
     name: string,
     args: Record<string, unknown>,
     credential?: string,
+    timings?: McpTimings,
   ) {
     if (name === "open_selection_menu") {
       if (Object.keys(args).some((k) => k !== "session_id"))
@@ -71,7 +77,7 @@ export class McpToolsService {
         throw new BadRequestException("会话参数无效。");
       return this.description(memberNo, readContext(args).id);
     }
-    return this.data.call(memberNo, name, args);
+    return this.data.call(memberNo, name, args, timings);
   }
   private async description(memberNo: string, id: string) {
     const { available_tables, ...value } = await this.sessions.describe(

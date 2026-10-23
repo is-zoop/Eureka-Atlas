@@ -6,9 +6,9 @@
 
 | client | 当前版本 | 下载 | ZIP 根目录 |
 | --- | --- | --- | --- |
-| codex | 2.2.1 | `/api/integrations/plugins/codex.zip` | `atlas-ask-codex/` |
-| claude | 2.2.1 | `/api/integrations/plugins/claude.zip` | `atlas-ask-claude/` |
-| eureka | 2.3.0 | `/api/integrations/plugins/eureka.zip` | `atlas-ask-eureka/` |
+| codex | 2.3.1 | `/api/integrations/plugins/codex.zip` | `atlas-ask-codex/` |
+| claude | 2.3.1 | `/api/integrations/plugins/claude.zip` | `atlas-ask-claude/` |
+| eureka | 2.4.2 | `/api/integrations/plugins/eureka.zip` | `atlas-ask-eureka/` |
 
 下载仍需 ADMIN / SYSTEM_ADMIN 的网页登录权限，附 `rules_version` 可拒绝过期规则快照（409）。正文泄露检查在所有端执行。MCP 的使用权限仍与管理权限分开，四种有效角色可用本人的个人凭证访问，不放宽原 REST。
 
@@ -42,7 +42,7 @@ Codex 继续提供 Agent Plugins 1.0 `plugin.json`、`mcp.json`，以及每个�
 
 ### plugin.json
 
-以 Agent Plugins 1.0 基础格式生成；`name`、`description`、`author` 与 Codex/Claude 同源。版本按端发行：Codex/Claude 仍为2.2.1，Eureka 独立提升为2.3.0，其生成源为 `eureka-plugin.ts`；Eureka `plugin.json`、`package.json` 和 release 的版本一致。额外声明：
+以 Agent Plugins 1.0 基础格式生成；`name`、`description`、`author` 与 Codex/Claude 同源。版本按端发行：Codex/Claude 为2.3.1，Eureka 为2.4.2，其生成源为 `eureka-plugin.ts`；Eureka `plugin.json`、`package.json` 和 release 的版本一致。额外声明：
 
 ```json
 {
@@ -54,6 +54,9 @@ Codex 继续提供 Agent Plugins 1.0 `plugin.json`、`mcp.json`，以及每个�
       "auth": {
         "atlas": { "provider": "haze-personal-credential" }
       },
+      "composer": {
+        "selectionMode": "persistent"
+      },
       "capabilities": {
         "requestUserInput": true
       }
@@ -64,19 +67,32 @@ Codex 继续提供 Agent Plugins 1.0 `plugin.json`、`mcp.json`，以及每个�
 
 `com.eureka` 是 **Eureka 专属扩展契约**，不是 Agent Plugins 标准已定义的认证字段。通过基础 Schema 校验只证明基础结构成立，不证明 Eureka 会识别扩展。
 
+### 输入框选用方式
+
+`extensions.com.eureka.composer.selectionMode` 声明选用方式，用户决定是否启用。本包自Eureka2.4.2声明`persistent`：
+
+| 值 | 行为 |
+| --- | --- |
+| once | 仅本条消息使用，发送后清空 |
+| persistent | 用户选中后标签常驻当前对话输入框，后续消息持续使用，直到用户移除 |
+
+宿主默认未声明时为once，拒绝其他值。声明persistent不会自动选择、安装、执行插件或启动后台进程，不授予能力；未选中/移除后不得凭历史选择继续使用技能、MCP或宿主能力。宿主负责每轮选择、禁用、身份及工具权限检查。它与Atlas选数范围随业务会话持久保存是两个独立概念，移除标签也不自动取消已提交的远端任务。
+
+这是Eureka专属清单扩展，不添加到Codex/Claude或mcp.json，不改共享业务Skill及规则哈希。离线解析通过不代表真实输入框常驻/移除交互已验收；更新组织安装后在会话空闲时重载，再由用户主动选中。
+
 ### package.json
 
 ```json
 {
   "name": "atlas-ask",
-  "version": "2.3.0",
+  "version": "2.4.2",
   "description": "使用正式语义、会话选表和远程MCP完成中文业务问数。",
   "keywords": ["pi-package"],
   "pi": { "skills": ["./skills"] }
 }
 ```
 
-版本以 Eureka 独立生成源为准，与该端 `plugin.json` 相同；在 Haze 发布时也必须填写2.3.0，不修改其他端版本。Eureka 当前使用的 Pi 包管理器可据此读取身份及发现两个技能，但 **Pi 技能发现不等于组织 Plugin 安装**。不配置 `pi.mcp`，不捆绑 MCP adapter 或凭证读取脚本；支持本契约的 Eureka 组织插件宿主必须从 `mcp.json` 统一注册服务，避免与通用 Pi 发现路径重复注册。
+版本以 Eureka 独立生成源为准，与该端 `plugin.json` 相同；在 Haze 发布时也必须填写2.4.2；各端使用自己的声明版本。Eureka 当前使用的 Pi 包管理器可据此读取身份及发现两个技能，但 **Pi 技能发现不等于组织 Plugin 安装**。不配置 `pi.mcp`，不捆绑 MCP adapter 或凭证读取脚本；支持本契约的 Eureka 组织插件宿主必须从 `mcp.json` 统一注册服务，避免与通用 Pi 发现路径重复注册。
 
 ### mcp.json
 
@@ -107,15 +123,15 @@ Atlas 不捆绑或复制 Eureka 的 adapter 或 Haze 凭证读取代码，也不
 
 ## Eureka 宿主能力 · 问题澄清
 
-本次按 Eureka `docs/clarification.md` 适配，仅修改 Eureka 版产物。`extensions.com.eureka.capabilities.requestUserInput=true` 与现有 schemaVersion=1、图标、认证配置合并。Eureka 已支持声明该能力；安装准备及详情展示“宿主能力 · 问题澄清”，但声明不是额外权限或实际验收。
+宿主问题澄清按 Eureka `docs/clarification.md` 适配，仅由 Eureka 版声明；本轮共享查询规范另行更新三端业务版本。`extensions.com.eureka.capabilities.requestUserInput=true` 与现有 schemaVersion=1、图标、认证配置合并。Eureka 已支持声明该能力；安装准备及详情展示“宿主能力 · 问题澄清”，但声明不是额外权限或实际验收。
 
 - 唯一工具是宿主 `request_user_input`，不在 `mcp.json` 注册、不新增 Atlas MCP 工具、JS、hooks 或凭证脚本。宿主按实际插件入口/所属 Skill 路径及来源、能力 ID、已加载包摘要、登录身份、启用状态与会话工具权限开放能力；不能凭普通文本中的插件名称获权。
 - 日常澄清开关仅控制日常对话，不控制插件声明；仅安装但未通过入口调用不会开放日常澄清。完全禁用工具不会因声明而恢复。
 - Eureka `atlas-ask` 先读规则、已有 Atlas 会话与选数和语义 Package。仅当时间、指标、店铺或分析维度确实缺失且会显著改变结果时才提问，不每次必问、不编造选项。每次1–4题、每题2–4个真实选项，可单选、多选、自定义或跳过。
 - 提问成功立即停止本轮，等待宿主收到答案后继续；不重复输出普通问题、不提前调用查询、不要求另开浏览器。关键口径被跳过仍不算确认，不能擅用默认值。
 - 回答后复用原 `session_id`、`scope_revision` 和选数。必要时从同一业务会话刷新版本，不新建 ALL，不重置选择；不自行重发可能已执行的远端查询。工具未提供时才退回普通文字询问，不声称显示了卡片。
-- `atlas-menu` 的正文和选数流程保持原样，不改成问答卡片。Codex/Claude 产物继续原版本与行为，不加入该 Eureka 能力。
-- 发布后更新组织安装；活动会话须在空闲时显式重载，不能仅换 ZIP 而沿用旧加载快照。Haze 发布版本需与2.3.0清单一致，本次不上传或发布。
+- `atlas-menu` 的正文和选数流程保持原样，不改成问答卡片。Codex/Claude 不加入该 Eureka 宿主能力，仍使用各自的澄清方式。
+- 发布后更新组织安装；活动会话须在空闲时显式重载，不能仅换 ZIP 而沿用旧加载快照。Haze 发布版本需与2.4.2清单一致，本次不上传或发布。
 
 “入口调用 → 歧义澄清 → 原业务会话继续查询”尚未完成真实联调；离线包校验和模拟测试不等同于实际 Atlas 新包验收。
 
@@ -137,6 +153,12 @@ Atlas 不捆绑或复制 Eureka 的 adapter 或 Haze 凭证读取代码，也不
 - 下载文件名沿用 `atlas-ask-<client>-<version>-<rules_version前12位>.zip`。`atlas-release.json` 保留 client、version、rules_version、generated_at、mcp_url，并标注开发用途。
 - `X-Atlas-Archive-SHA256` 校验实际 ZIP 全部字节，本地导出同时生成同名 `.zip.sha256` 文件。ZIP 包含生成时间，重复生成时文件哈希可能不同；规则哈希不是 ZIP 校验和，ZIP 也不能包含自身最终校验和。
 - 不新增历史版本数据库、历史包下载、回滚、自动更新或发布接口。
+
+## 问数质量与等待更新
+
+三端共享查询规范已加入多来源先让用户选择、同名指标口径区分及原会话连续性规则，不新增服务端确认门禁。结果包含有限 presentation，默认表格，仅按已有unit进行展示转换：%乘100、万元除10000、亿元除100000000，小数默认2位；不新增需维护的精度/尺度字段，不在治理中显示额外控件。presentation已经换算，模型不二次转换，原始数据与公式不变。query_data/get_dimension_values/get_query_result 支持 wait_ms=0–10000，默认8000，短任务直接带结果；不通过终端 sleep 等待。
+
+网页专用图表/卡片抑制规则不再进入默认插件业务快照。完整展示契约、迁移、旧自定义模板处理和计时说明见 [实现与部署](agent-query-quality-implementation.md)。更新三端包与宿主加载快照后生效，不代表已完成真实联调。
 
 ## 验证边界与参考
 

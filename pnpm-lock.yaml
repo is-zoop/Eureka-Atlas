@@ -31,6 +31,9 @@ importers:
       '@eureka-atlas/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@eureka-atlas/result-format':
+        specifier: workspace:*
+        version: link:../../packages/result-format
       '@eureka-atlas/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -170,6 +173,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.10
         version: 6.43.10
+      '@eureka-atlas/result-format':
+        specifier: workspace:*
+        version: link:../../packages/result-format
       '@eureka-atlas/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -371,11 +377,24 @@ importers:
         specifier: ^5.7.3
         version: 5.7.3
 
+  packages/result-format:
+    dependencies:
+      bignumber.js:
+        specifier: 9.0.0
+        version: 9.0.0
+    devDependencies:
+      typescript:
+        specifier: ^5.7.3
+        version: 5.7.3
+
   packages/types:
     devDependencies:
       '@eureka-atlas/config':
         specifier: workspace:*
         version: link:../config
+      '@eureka-atlas/result-format':
+        specifier: workspace:*
+        version: link:../result-format
       typescript:
         specifier: ^5.7.3
         version: 5.7.3
@@ -14537,7 +14556,7 @@ snapshots:
 
   micromark-util-character@2.1.1:
     dependencies:
-      micromark-util-symbol: 2.0.1
+      micromark-util-symbol: 2.0.0
       micromark-util-types: 2.0.3
 
   micromark-util-chunked@2.0.0:

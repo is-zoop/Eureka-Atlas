@@ -10,7 +10,7 @@
     "dev:wps": "pnpm --filter @eureka-atlas/wps-addin dev",
     "build:wps": "pnpm --filter @eureka-atlas/wps-addin build",
     "package:wps": "pnpm --filter @eureka-atlas/wps-addin package:windows",
-    "build:api": "pnpm --filter @eureka-atlas/api build",
+    "build:api": "pnpm --filter @eureka-atlas/result-format build && pnpm --filter @eureka-atlas/api build",
     "build": "pnpm db:generate && pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
     "db:generate": "pnpm --filter @eureka-atlas/database generate",
